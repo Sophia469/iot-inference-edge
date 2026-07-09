@@ -1,9 +1,8 @@
 """
 Research Assistant — natural-language Q&A over experimental data.
-
-Powered by Claude Sonnet 4.5 via the Emergent universal LLM key.
-Grounds every answer in real data from the SQLite decision log, the last
-benchmark run (in-memory + on-disk artefacts) and the trained engine state.
+Powered by Google Gemini.
+Grounded in real data from the SQLite decision log, benchmark results and
+experimental artefacts.
 
 Design principles:
  - The LLM never invents numbers. All metrics come from the assembled context.
@@ -18,12 +17,12 @@ from typing import Dict, Any, List, Optional
 from pathlib import Path
 from dotenv import load_dotenv
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage
+from google import genai
 
 load_dotenv()
 
-MODEL_PROVIDER = "anthropic"
-MODEL_NAME = "claude-sonnet-4-5-20250929"
+MODEL_PROVIDER = "google"
+MODEL_NAME = "gemini-2.5-flash"
 
 ARTEFACT_DIR = Path("/tmp/benchmark")
 
@@ -110,32 +109,38 @@ async def build_context(
         ]
     return ctx
 
+async def ask(
+    question: str,
+    context: Dict[str, Any],
+    session_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Send a single question to Gemini grounded in the experimental context."""
 
-async def ask(question: str, context: Dict[str, Any],
-              session_id: Optional[str] = None) -> Dict[str, Any]:
-    """Send a single question to Claude Sonnet 4.5 grounded in the experimental context."""
-    api_key = os.environ.get("EMERGENT_LLM_KEY")
+    api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise RuntimeError("EMERGENT_LLM_KEY not configured")
+        raise RuntimeError("GEMINI_API_KEY not configured")
 
     session_id = session_id or f"assistant-{uuid.uuid4().hex[:8]}"
 
-    chat = LlmChat(
-        api_key=api_key,
-        session_id=session_id,
-        system_message=SYSTEM_PROMPT,
-    ).with_model(MODEL_PROVIDER, MODEL_NAME)
+    client = genai.Client(api_key=api_key)
 
     context_json = json.dumps(context, ensure_ascii=False, default=str, indent=2)
+
     prompt = (
-        f"EXPERIMENTAL CONTEXT (source of truth — quote from this, never invent):\n"
+        f"{SYSTEM_PROMPT}\n\n"
+        "EXPERIMENTAL CONTEXT (source of truth — quote from this, never invent):\n"
         f"```json\n{context_json}\n```\n\n"
         f"QUESTION: {question}"
     )
-    response_text = await chat.send_message(UserMessage(text=prompt))
+
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=prompt,
+    )
+
     return {
         "session_id": session_id,
         "question": question,
-        "answer": response_text,
+        "answer": response.text,
         "model": f"{MODEL_PROVIDER}/{MODEL_NAME}",
     }

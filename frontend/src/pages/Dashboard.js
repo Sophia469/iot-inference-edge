@@ -12,8 +12,9 @@ import {
   Cube, MapPin, Brain, Path,
 } from "@phosphor-icons/react";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://127.0.0.1:8001";
+// Ensure no trailing slash so `${API}/...` builds correctly
+const API = `${BACKEND_URL.replace(/\/+$/, "")}/api`;
 
 const LABELS = ["person", "car", "truck", "bicycle", "forklift", "helmet", "pallet", "box", "dog"];
 
