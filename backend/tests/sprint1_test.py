@@ -7,7 +7,7 @@ Covers:
 - POST /api/benchmark/ci (mean/std/ci95/low/high/n)
 - POST /api/report/generate  + GET /api/benchmark/artefact/thesis_report.pdf
 - POST /api/decisions/predict with engine=rf and engine=rule (explanation)
-- POST /api/assistant/ask (Claude Sonnet 4.5 via emergentintegrations)
+- POST /api/assistant/ask (assistant backend via OpenAI)
 - Multi-turn assistant session_id continuity
 """
 import os
