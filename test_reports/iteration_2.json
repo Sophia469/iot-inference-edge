@@ -1,0 +1,27 @@
+{
+  "summary": "Iteration 2 verified. All 15 backend pytest tests PASSED (Decision status w/ 4 engines, Q-Learning predict incl. offline->edge, Q-Learning train + qtable, Real Inference edge/cloud/hybrid/offline, and legacy regression: devices/models/deployments/metrics/inferences). All 7 frontend flows PASSED via Playwright: dashboard load, 4-engine selector, Q-Learning sidebar metrics (episodes/mean_reward/states/α·γ), DT sidebar (accuracy/n_train/n_test), Retrain button parallel training, REAL inference runner card (real latency/CPU/memory/FLOPs w/ toast), Architecture modal 4-policy grid, Last Decision card showing 'state=NN · Q=[...]' when Q-Learning active. No blockers, no regressions.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard charts", "issues": ["Recharts warning: ResponsiveContainer briefly reports width(-1)/height(-1) at first paint. Cosmetic console warning only; chart renders correctly after data arrives. Consider setting a minHeight on the chart container."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/backend_test.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py: The two `@app.on_event('startup')`/`@app.on_event('shutdown')` handlers are registered AFTER app.include_router(api_router). This currently works but FastAPI deprecates on_event in favor of lifespan context; also mixing router include order with startup handlers is fragile. Minor.",
+    "server.py: `os.environ['MONGO_URL']` and `os.environ['DB_NAME']` will raise KeyError at import time if unset — that's actually the desired fail-fast behaviour, keep as is.",
+    "qlearning_agent.py: `simulate_outcome` uses random.uniform inside training and inside the reward for a *single-step* episode (no next state). The Q-update degenerates to `Q(s,a) += α (r - Q(s,a))` — this is a contextual bandit, not full Q-Learning. For the thesis this is a legitimate design choice (state has no temporal component), but consider renaming or documenting it as 'tabular contextual bandit' in the paper to avoid academic-review nitpicks.",
+    "inference_runner.py: `process.cpu_percent(interval=None)` requires a prior priming call plus a real elapsed interval; when the workload is <5ms this frequently reports 0.0% (observed 0% in test run). Consider using `interval=0.05` for a truer sample or documenting the caveat.",
+    "Dashboard.js: Recharts container initially receives width/height -1 (console warning). Non-blocking but noisy."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (15/15)", "frontend": "100% (7/7)"},
+  "test_credentials": "n/a — no auth in this app",
+  "seed_data_creation": "MongoDB seed (4 devices + 4 models) is created by backend startup; SQLite decisions.db + qlearning.npy artefacts already present. One TEST_ inference record was ingested during regression test.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "backend_test.py is the canonical regression suite — 15 tests, ~1.5s runtime. Q-Learning warmup happens on backend startup (5000 episodes, ~2s). If retesting after backend restart, first hit /api/decisions/status once to allow the warmup to complete before running the qlearning tests."
+}

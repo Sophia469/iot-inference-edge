@@ -1,0 +1,33 @@
+{
+  "scenario": "Factory Normal",
+  "scenario_id": "factory_normal",
+  "description": "Balanced workload, network healthy, moderate CPU/memory. Baseline operating condition.",
+  "seeds": [
+    2026,
+    42,
+    7,
+    1234,
+    9999
+  ],
+  "runs": 100,
+  "total_evaluations": 2000,
+  "policies": [
+    "RuleBased",
+    "DecisionTree",
+    "RandomForest",
+    "QLearning"
+  ],
+  "generated_at": "2026-07-08T21:21:47.601174+00:00",
+  "artefacts": [
+    "results.csv",
+    "report.pdf",
+    "latency.png",
+    "cost.png",
+    "reward.png",
+    "route_distribution.png",
+    "decision_time.png",
+    "benchmark_summary.json",
+    "benchmark_ci.json",
+    "metadata.json"
+  ]
+}

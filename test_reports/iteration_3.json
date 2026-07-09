@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 3 (Comparative Benchmark Harness) fully verified. Backend: 35/35 pytest tests PASSED (15 legacy regression + 20 new benchmark tests covering POST /api/benchmark/run 4-engine summary, GET /api/benchmark/last idempotent read, allow-listed artefact endpoints for 5 PNG charts + CSV + JSON, malicious/path-traversal 404, agreement_with_rule invariants: Rule=1.0, DT>0.85, QL free). Frontend: all 12 acceptance criteria PASSED via Playwright — benchmark-card empty state, run-benchmark-btn spinner, benchmark-table with 4 policy rows and 8 columns, 5 chart thumbnails linking to backend /api/benchmark/artefact/*.png, download-csv-btn, runtime log '[benchmark] complete · 2000 records · engines: DecisionTree, QLearning, RandomForest, RuleBased', 4-engine selector, real inference runner, retrain button, architecture modal with 4-policy grid and 'Research platform...' tagline. CSV verified via in-page fetch: 200 OK, header contains all required columns, 2001 data rows.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Comparative Experiment card", "issues": ["Button label says 'Run 500 Scenarios' — hard-coded. If UI needs to expose configurable n_scenarios (e.g., quick 100-scenario preview), consider a dropdown. Not a bug; documented for thesis reproducibility (fixed n=500, seed=2026).", "Chart thumbnails use object-cover which crops the chart's y-axis labels; consider object-contain for better readability of thumbnails (full-size link still works)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/benchmark_test.py",
+    "/app/test_reports/pytest/pytest_results.xml",
+    "/app/test_reports/pytest/benchmark_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "benchmark.py:_ensure_trained — good guard, but qlearning_agent import at module top of benchmark.py could trigger training import cost even when run_benchmark isn't called. Currently OK because it just references the singleton. Minor.",
+    "benchmark.py: save_charts imports matplotlib inside the function (good) but callers catch only ImportError — if matplotlib itself is present but backend Agg fails (e.g., missing tkinter in a stripped image), the exception would propagate. Consider broadening to `except Exception` with a warning log for defensive artefact generation.",
+    "benchmark.py: `random.seed(seed * 7919 + i)` inside the engine loop reseeds the global random module — this makes latency/cost deterministic per (seed, scenario_id) which is desirable, but it also affects any concurrent random usage elsewhere in the process (e.g., simulate_outcome uses random.uniform). Acceptable for benchmark reproducibility; documented for future contributors.",
+    "server.py: LAST_BENCHMARK is a module-level dict — fine for single-worker uvicorn, but under multi-worker deployment each worker would have its own copy, so /api/benchmark/last could return stale data if the run and read hit different workers. Fine for research prototype.",
+    "server.py: /api/benchmark/artefact returns FileResponse without cache-control headers. The frontend already busts cache via `?t=${generated_at}` query param, so this is fine but worth documenting.",
+    "Dashboard.js:824 — `img src=...?t=...` cache-busting is per-benchmark run (uses meta.generated_at). Good.",
+    "Dashboard.js:308–327 runBenchmark — no timeout on axios.post; for larger scenario counts (>1000) the browser default 0 timeout could hang the UI. Consider a 60s explicit timeout with a clear error toast."
+  ],
+  "updated_files": [
+    "/app/backend/tests/benchmark_test.py (new — 20 tests)"
+  ],
+  "success_rate": {"backend": "100% (35/35)", "frontend": "100% (12/12)"},
+  "test_credentials": "n/a — no auth in this app",
+  "seed_data_creation": "Benchmark run wrote /tmp/benchmark/{benchmark_records.csv, benchmark_summary.json, 5x chart_*.png}. No test data left in MongoDB beyond the pre-existing devices/models seed.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Two regression suites now exist: /app/backend/tests/backend_test.py (15 tests, legacy + Q-Learning + Real Inference) and /app/backend/tests/benchmark_test.py (20 tests, comparative benchmark harness). Full suite runs in ~5s with pytest-xdist. Benchmark suite uses a session-scoped fixture that runs one 100-scenario benchmark and reuses the artefacts across tests — keeps runtime <5s. To manually re-run: `pytest /app/backend/tests/ -v`. Benchmark artefacts land in /tmp/benchmark/. Empirically observed QLearning agreement_with_rule ~59%, DecisionTree ~94–97%, RandomForest ~94–97%, RuleBased 100% (as expected).",
+  "rca_of_the_issue": "n/a — no bugs found in iteration 3."
+}

@@ -1,0 +1,26 @@
+{
+  "summary": "First-finish smoke test of Edge-Cloud AI Orchestration Simulator. All 7 backend endpoints and all 8 frontend flows passed. Backend correctly seeds 4 devices/4 models, toggles network status, creates deployments (with 404s for invalid IDs), ingests inference batches, and aggregates metrics. Frontend dashboard renders header, fleet, KPIs, charts, model repo, deployments, and streaming logs; mode toggle changes latency range (edge ~30ms vs cloud ~183ms); disconnect simulation surfaces ERR entries; deploying YOLOv8s to jetson-edge-02 appears in Recent Deployments and updates fleet model; Architecture modal opens with all required sections and closes.",
+  "tested_scope": ["backend", "frontend", "integration"],
+  "passed": [
+    "GET /api/devices returns 4 seeded Jetson devices with name/location/connected=true/deployed_model_name populated",
+    "GET /api/models returns 4 models (YOLOv8n/YOLOv8s/MobileNet-SSD/EfficientDet-D0) with version/task/size_mb/accuracy",
+    "POST /api/devices/{id}/network toggles connected=false -> status=offline and connected=true -> status=online",
+    "POST /api/deployments with valid IDs returns status=active and updates device deployed_model_name to YOLOv8s@1.2.1",
+    "POST /api/deployments returns 404 for invalid device_id and invalid model_id",
+    "POST /api/inferences accepts batch (inserted=1); GET /api/metrics/summary returns aggregated edge & cloud metrics",
+    "GET /api/metrics/timeseries returns records in chronological order",
+    "Frontend loads at / with header 'EDGE-CLOUD // ORCHESTRATOR' and 4/4 devices online badge",
+    "All 4 device tiles (device-jetson-edge-01..04) visible; clicking jetson-edge-02 sets active simulator title",
+    "Mode toggle: cloud/edge buttons switch simulator; Edge Latency ~29.89ms vs Cloud Latency ~182.66ms KPI observed",
+    "Simulate Disconnect (toggle-network-btn) surfaces ERR entries in page; second click restores",
+    "Selecting model-YOLOv8s + deploy-model-btn adds YOLOv8s@1.2.1 ACTIVE entry to Recent Deployments and updates fleet model of jetson-edge-02",
+    "Architecture button opens architecture-modal containing AWS/Jetson/Data Flow/Contribution sections; close dismisses modal",
+    "Greengrass Runtime Logs panel streams timestamped entries with OK/INFO level tags (visible in screenshot)"
+  ],
+  "failed": [],
+  "action_items": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "retest_needed": false,
+  "full_testing_deferred": true,
+  "notes": "Inference generation is browser-simulated (setInterval) as declared; AWS Greengrass is conceptual. No page errors, no console errors observed. Live-logs container lacks a data-testid but the panel visibly streams entries in the screenshot; minor nit only."
+}

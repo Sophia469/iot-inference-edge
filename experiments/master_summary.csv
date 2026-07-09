@@ -1,0 +1,9 @@
+scenario,winner_reward,DecisionTree_latency_ms_p50,DecisionTree_cost_usd_total,DecisionTree_reward_mean,DecisionTree_success_rate,DecisionTree_agreement_with_rule,QLearning_latency_ms_p50,QLearning_cost_usd_total,QLearning_reward_mean,QLearning_success_rate,QLearning_agreement_with_rule,RandomForest_latency_ms_p50,RandomForest_cost_usd_total,RandomForest_reward_mean,RandomForest_success_rate,RandomForest_agreement_with_rule,RuleBased_latency_ms_p50,RuleBased_cost_usd_total,RuleBased_reward_mean,RuleBased_success_rate,RuleBased_agreement_with_rule
+Mixed Traffic,QLearning,47.128,0.2746,-11.8198,0.998,0.944,38.932,0.002,-0.4706,1.0,0.63,45.478,0.259,-10.7452,1.0,0.958,46.712,0.2812,-11.6092,1.0,1.0
+Factory Normal,QLearning,37.23,0.057,-1.1366,1.0,0.98,34.84,0.002,0.6826,1.0,0.844,35.59,0.0247,0.0278,1.0,0.886,37.15,0.053,-0.9256,1.0,1.0
+Network Failure,QLearning,38.334,0.0169,-6.7234,1.0,1.0,36.67,0.002,-0.215,1.0,0.864,38.15,0.015,-5.9956,1.0,0.982,38.334,0.0169,-6.7218,1.0,1.0
+High CPU Load,QLearning,192.82,0.7536,-28.3188,1.0,0.936,49.294,0.002,-3.407,1.0,0.0,190.582,0.7475,-27.8274,1.0,0.972,189.88,0.7471,-27.7712,1.0,1.0
+Large Model,QLearning,126.416,0.9765,-25.5218,1.0,0.97,40.06,0.002,-0.772,1.0,0.228,112.948,0.9286,-24.184,1.0,0.94,123.218,0.9653,-25.237,1.0,1.0
+Cloud Congestion,QLearning,35.374,0.0386,-3.7382,1.0,1.0,34.138,0.002,0.3664,1.0,0.908,35.374,0.0386,-3.7338,1.0,1.0,35.374,0.0386,-3.738,1.0,1.0
+Low Bandwidth,QLearning,37.256,0.004,-0.6552,1.0,1.0,36.86,0.002,0.0148,1.0,0.97,37.256,0.004,-0.6474,1.0,1.0,37.256,0.004,-0.6548,1.0,1.0
+High Priority,QLearning,90.308,0.2284,-12.9898,1.0,0.8,38.252,0.002,-1.4674,1.0,0.16,80.258,0.1892,-10.3918,1.0,0.73,92.388,0.2248,-12.6222,1.0,1.0

@@ -1,0 +1,85 @@
+{
+  "theme": "Dark",
+  "archetype": "4 (Swiss & High-Contrast)",
+  "domain": "Academic prototype, IoT, DevOps telemetry",
+  "colors": {
+    "background": "#050505",
+    "surface": "#0A0A0A",
+    "surface_hover": "#141414",
+    "border": "#27272A",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#A1A1AA",
+    "accent_primary": "#0055FF",
+    "danger": "#FF3333",
+    "warning": "#FFCC00",
+    "success": "#00E676"
+  },
+  "typography": {
+    "font_family_headings": "JetBrains Mono",
+    "font_family_body": "IBM Plex Sans",
+    "font_family_mono": "JetBrains Mono",
+    "rules": [
+      "Use tight letter spacing (tracking-tight) for headings",
+      "Do not use generic sans for headings",
+      "Overlines and labels must be Uppercase, text-xs, tracking-[0.2em]"
+    ]
+  },
+  "layout_and_spacing": {
+    "mode": "Mode B: The Control Room Grid",
+    "container": "w-full max-w-[1600px] mx-auto",
+    "base_grid": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-12",
+    "gap": "gap-1 bg-zinc-800",
+    "padding": "p-4 md:p-6",
+    "radius": "rounded-none"
+  },
+  "components": {
+    "card": "bg-[#0A0A0A] rounded-none border border-[#27272A] shadow-none",
+    "button": "rounded-none font-mono uppercase text-sm tracking-wider px-6 py-2 transition-colors",
+    "button_primary": "bg-[#0055FF] text-white hover:bg-[#0044CC]",
+    "button_danger": "bg-transparent border border-[#FF3333] text-[#FF3333] hover:bg-[#FF3333] hover:text-white",
+    "badge": "rounded-none px-2 py-0.5 text-xs font-mono border",
+    "chart": "Recharts with monochrome/minimal styling. Grid lines should be very subtle (#27272A). Tooltips must have solid black backgrounds with 1px border.",
+    "logs_panel": "bg-black text-[#A1A1AA] font-mono text-xs p-4 h-full overflow-y-auto border border-[#27272A]"
+  },
+  "icons": {
+    "library": "@phosphor-icons/react",
+    "style": "Regular or Duotone, geometric and clean"
+  },
+  "motion": {
+    "hover": "Instant color changes or minimal 150ms transitions. No bouncy scaling.",
+    "logs": "Smooth auto-scroll for new log entries."
+  },
+  "testing": {
+    "requirements": "All interactive and key informational elements MUST include a data-testid attribute in kebab-case."
+  },
+  "image_urls": [
+    {
+      "url": "https://images.pexels.com/photos/37730212/pexels-photo-37730212.jpeg",
+      "category": "background",
+      "description": "Use as a heavily darkened (bg-black/80) background for the architecture diagram modal or header."
+    }
+  ],
+  "page_sections": {
+    "header": {
+      "layout": "Flex row, justify-between, items-center. border-b border-[#27272A]. bg-[#050505]",
+      "content": "App title (JetBrains Mono, tracking-tighter), global connection status (pulsing dot), overall latency."
+    },
+    "grid_layout": {
+      "fleet_panel": "col-span-12 lg:col-span-3. List of devices. Selected state gets a 1px blue border or background tint.",
+      "simulator_main": "col-span-12 lg:col-span-6. Includes the big Edge vs Cloud toggle and the Network Disconnect button (Danger style).",
+      "model_repo": "col-span-12 lg:col-span-3. List of models, deploy button.",
+      "metrics_charts": "col-span-12 lg:col-span-8. Line charts for Latency and Cost. Small metric blocks (KPIs) above the charts.",
+      "logs": "col-span-12 lg:col-span-4. Live terminal output."
+    }
+  },
+  "instructions_to_main_agent": [
+    "Ensure the layout feels like a single pane of glass (Control Room Grid).",
+    "Use JetBrains Mono for all headings and data values to enforce the engineering/telemetry vibe.",
+    "Do not use border radius (rounded-none) anywhere to maintain the strict, rigid Swiss Brutalist aesthetic.",
+    "For the grid, you can use a flex/grid layout with strict 1px borders to separate widgets.",
+    "Implement the live simulation data via mock intervals in React (FPS, CPU, Mem, Latency).",
+    "When 'Simulate Network Disconnect' is active, transition Edge latency to spike and Cloud latency to show 'ERR', update logs with connection timeout errors.",
+    "Install @phosphor-icons/react for icons.",
+    "Use Recharts for the metrics chart."
+  ]
+}

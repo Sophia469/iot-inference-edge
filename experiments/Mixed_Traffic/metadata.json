@@ -1,0 +1,33 @@
+{
+  "scenario": "Mixed Traffic",
+  "scenario_id": "mixed",
+  "description": "Broad random mix. Baseline / stress-test \u2014 the default legacy behaviour.",
+  "seeds": [
+    2026,
+    42,
+    7,
+    1234,
+    9999
+  ],
+  "runs": 100,
+  "total_evaluations": 2000,
+  "policies": [
+    "RuleBased",
+    "DecisionTree",
+    "RandomForest",
+    "QLearning"
+  ],
+  "generated_at": "2026-07-08T21:21:29.736594+00:00",
+  "artefacts": [
+    "results.csv",
+    "report.pdf",
+    "latency.png",
+    "cost.png",
+    "reward.png",
+    "route_distribution.png",
+    "decision_time.png",
+    "benchmark_summary.json",
+    "benchmark_ci.json",
+    "metadata.json"
+  ]
+}

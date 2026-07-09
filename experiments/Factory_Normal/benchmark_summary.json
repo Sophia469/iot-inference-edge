@@ -1,0 +1,74 @@
+{
+  "DecisionTree": {
+    "n": 100,
+    "success_rate": 1.0,
+    "latency_ms_mean": 38.52,
+    "latency_ms_p50": 36.68,
+    "latency_ms_p95": 72.2,
+    "cost_usd_total": 0.0238,
+    "cost_usd_mean": 0.000238,
+    "decision_time_us_mean": 47.02,
+    "decision_time_us_p95": 56.79,
+    "reward_mean": 0.014,
+    "agreement_with_rule": 0.99,
+    "route_distribution": {
+      "edge": 92,
+      "cloud": 0,
+      "hybrid": 8
+    }
+  },
+  "QLearning": {
+    "n": 100,
+    "success_rate": 1.0,
+    "latency_ms_mean": 34.77,
+    "latency_ms_p50": 35.41,
+    "latency_ms_p95": 48.17,
+    "cost_usd_total": 0.002,
+    "cost_usd_mean": 2e-05,
+    "decision_time_us_mean": 21.48,
+    "decision_time_us_p95": 25.42,
+    "reward_mean": 0.805,
+    "agreement_with_rule": 0.93,
+    "route_distribution": {
+      "edge": 100,
+      "cloud": 0,
+      "hybrid": 0
+    }
+  },
+  "RandomForest": {
+    "n": 100,
+    "success_rate": 1.0,
+    "latency_ms_mean": 37.07,
+    "latency_ms_p50": 35.79,
+    "latency_ms_p95": 50.66,
+    "cost_usd_total": 0.0159,
+    "cost_usd_mean": 0.000159,
+    "decision_time_us_mean": 13849.89,
+    "decision_time_us_p95": 23954.61,
+    "reward_mean": 0.317,
+    "agreement_with_rule": 0.97,
+    "route_distribution": {
+      "edge": 96,
+      "cloud": 0,
+      "hybrid": 4
+    }
+  },
+  "RuleBased": {
+    "n": 100,
+    "success_rate": 1.0,
+    "latency_ms_mean": 38.05,
+    "latency_ms_p50": 36.65,
+    "latency_ms_p95": 66.94,
+    "cost_usd_total": 0.0229,
+    "cost_usd_mean": 0.000229,
+    "decision_time_us_mean": 3.14,
+    "decision_time_us_p95": 3.54,
+    "reward_mean": 0.086,
+    "agreement_with_rule": 1.0,
+    "route_distribution": {
+      "edge": 93,
+      "cloud": 0,
+      "hybrid": 7
+    }
+  }
+}

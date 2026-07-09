@@ -1,0 +1,33 @@
+{
+  "scenario": "Cloud Congestion",
+  "scenario_id": "cloud_congestion",
+  "description": "Network reachable but slow (RTT 350\u2013800 ms). Cloud becomes an expensive option.",
+  "seeds": [
+    2026,
+    42,
+    7,
+    1234,
+    9999
+  ],
+  "runs": 100,
+  "total_evaluations": 2000,
+  "policies": [
+    "RuleBased",
+    "DecisionTree",
+    "RandomForest",
+    "QLearning"
+  ],
+  "generated_at": "2026-07-08T21:22:56.376504+00:00",
+  "artefacts": [
+    "results.csv",
+    "report.pdf",
+    "latency.png",
+    "cost.png",
+    "reward.png",
+    "route_distribution.png",
+    "decision_time.png",
+    "benchmark_summary.json",
+    "benchmark_ci.json",
+    "metadata.json"
+  ]
+}

@@ -1,0 +1,86 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap");
+
+.App {
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  background: #050505;
+  color: #fff;
+  min-height: 100vh;
+}
+
+.font-mono,
+.mono {
+  font-family: "JetBrains Mono", "SFMono-Regular", Menlo, Consolas, monospace !important;
+}
+
+.overline {
+  font-family: "JetBrains Mono", monospace;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: #71717a;
+}
+
+/* Pulsing dot */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+.pulse-dot {
+  animation: pulse-dot 1.6s ease-in-out infinite;
+}
+
+/* Grid lines for control-room feel */
+.grid-line {
+  background-color: #27272A;
+}
+
+/* Scanline shimmer for live indicators */
+@keyframes scan {
+  0% { background-position: 0 0; }
+  100% { background-position: 0 24px; }
+}
+.scan-bg {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    rgba(255,255,255,0.02) 0px,
+    rgba(255,255,255,0.02) 1px,
+    transparent 1px,
+    transparent 4px
+  );
+  animation: scan 3s linear infinite;
+}
+
+/* Terminal log styling */
+.term-log {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #a1a1aa;
+}
+.term-log .ts { color: #52525b; }
+.term-log .lvl-info { color: #0055FF; }
+.term-log .lvl-warn { color: #FFCC00; }
+.term-log .lvl-err  { color: #FF3333; }
+.term-log .lvl-ok   { color: #00E676; }
+.term-log .tag      { color: #71717a; }
+
+/* Custom scrollbar */
+.thin-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.thin-scroll::-webkit-scrollbar-track { background: transparent; }
+.thin-scroll::-webkit-scrollbar-thumb { background: #27272A; }
+.thin-scroll::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+
+/* Blink caret */
+@keyframes blink { 50% { opacity: 0; } }
+.caret::after {
+  content: "_";
+  color: #00E676;
+  margin-left: 4px;
+  animation: blink 1s steps(1) infinite;
+}
+
+/* Selection */
+::selection { background: #0055FF; color: white; }
+
+/* No radius everywhere for Swiss look */
+button, .card, input, select { border-radius: 0 !important; }

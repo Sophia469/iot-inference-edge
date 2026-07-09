@@ -1,0 +1,41 @@
+version: "3.9"
+
+# Edge-Cloud AI Orchestration — full stack for local Docker & AWS EC2 deployment
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    environment:
+      - MONGO_URL=mongodb://mongo:27017
+      - DB_NAME=edge_cloud_orchestrator
+      - CORS_ORIGINS=*
+    volumes:
+      - backend_artefacts:/app/artefacts
+    ports:
+      - "8001:8001"
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # For local dev point to the backend service reachable via nginx proxy
+        REACT_APP_BACKEND_URL: http://localhost
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+
+volumes:
+  mongo_data:
+  backend_artefacts:

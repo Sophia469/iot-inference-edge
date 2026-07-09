@@ -1,0 +1,33 @@
+{
+  "scenario": "High CPU Load",
+  "scenario_id": "high_cpu_load",
+  "description": "Edge devices saturated (CPU 3\u201325%, mem 15\u201340%). Forces offloading decisions.",
+  "seeds": [
+    2026,
+    42,
+    7,
+    1234,
+    9999
+  ],
+  "runs": 100,
+  "total_evaluations": 2000,
+  "policies": [
+    "RuleBased",
+    "DecisionTree",
+    "RandomForest",
+    "QLearning"
+  ],
+  "generated_at": "2026-07-08T21:22:21.847387+00:00",
+  "artefacts": [
+    "results.csv",
+    "report.pdf",
+    "latency.png",
+    "cost.png",
+    "reward.png",
+    "route_distribution.png",
+    "decision_time.png",
+    "benchmark_summary.json",
+    "benchmark_ci.json",
+    "metadata.json"
+  ]
+}

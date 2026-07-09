@@ -1,0 +1,1 @@
+{"episodes": 3000, "alpha": 0.15, "gamma": 0.9, "mean_reward_last_500": -1.25, "route_distribution_training": {"edge": 2301, "cloud": 341, "hybrid": 358}, "n_states": 108, "n_actions": 3, "trained_at": 1783543586.5212524, "converged_greedy_ratio": 0.306}
