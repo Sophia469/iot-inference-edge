@@ -1,239 +1,285 @@
-# iot-inference-edge
+# AI-Driven Edge–Cloud Orchestration
 
-**Edge–Cloud AI Orchestrator**
+Research artefact developed for the MSc Artificial Intelligence dissertation:
 
-Research platform for AI-driven infrastructure orchestration across Edge–Cloud environments using NVIDIA Jetson and AWS.
+**AI-Driven Infrastructure Orchestration for Edge–Cloud Environments:  
+A Comparative Study of Intelligent Decision Policies for AI Inference Routing**
 
-Developed as part of the **MSc Artificial Intelligence** programme at the **University of Bedfordshire**.
-
----
-
-## Academic Information
-
-**Status:** Frozen dissertation artefact
-
-**Author:** Sophia Souza Marçal
-
-**Student ID:** 1808415
-
-**Programme:** MSc Artificial Intelligence
-
-**Module:** 25-26BLK5-6AACIS144-6 – MSc Project
-
-**Institution:** University of Bedfordshire
-
-**Release:** v1.0.0-thesis
+University of Bedfordshire
 
 ---
 
-## Dissertation
+## 1. Overview
 
-**AI-Driven Infrastructure Orchestration for Edge–Cloud Environments:**
+This repository contains the implemented research artefact for an AI-driven
+Edge–Cloud orchestration system designed to investigate dynamic AI workload
+placement across heterogeneous computing resources.
 
-*A Comparative Study of Intelligent Decision Policies for AI Inference Routing*
+The system integrates a React monitoring dashboard, a Python/FastAPI
+orchestration backend, an Ubuntu Linux Edge environment connected through
+AWS IoT Greengrass, and an Amazon EC2 Cloud node.
 
----
+AI workloads are routed between three execution alternatives:
 
-## System
+- Edge
+- Cloud
+- Hybrid
 
-**EDGE-CLOUD // ORCHESTRATOR**
-
----
-
-## 0. Academic artefact
-
-This repository is the frozen research artefact for the thesis chapter *Option 2 — AWS-Native Edge AI Orchestration using AWS IoT Greengrass*.
-
-A full-stack, container-ready prototype that deploys and manages AI inference workloads (YOLO / object-detection) between an **NVIDIA Jetson** edge device and **AWS EC2**, orchestrated through **AWS IoT Greengrass v2**, with an ML-driven **Decision Engine** that dynamically routes each inference request to `edge`, `cloud`, or `hybrid` execution.
+Routing decisions are produced using Rule-Based and Q-Learning policies.
 
 ---
 
-## 1. Artefact
+## 2. Research Purpose
 
-Research platform for intelligent Edge–Cloud AI orchestration using NVIDIA Jetson and AWS, integrating AWS IoT Greengrass, Docker and pre-trained AI models. Includes a four-policy Decision Engine (Rule-Based / Decision Tree / Random Forest / Q-Learning) that dynamically routes each inference request to minimise latency and cost while maintaining resilience during connectivity issues.
+The artefact provides an operational environment for investigating how AI
+inference workloads can be dynamically placed across Edge and Cloud resources.
 
-## 2. Contribution
+The implementation enables routing behaviour to be examined alongside runtime
+conditions including execution latency, CPU utilisation, memory utilisation,
+network round-trip time, execution success and policy decision time.
 
-Implementation and comparative evaluation of four orchestration policies for Edge–Cloud AI workloads deployed via AWS IoT Greengrass, showing how progressively more adaptive strategies (fixed rules → supervised tree → ensemble → RL agent) affect latency, cost, resource utilisation and reliability.
-
----
-
-## 2.1 Scope & Non-Goals
-
-**In scope**
-- Integration of existing technologies (AWS IoT Greengrass, Docker, pre-trained AI models)
-- Design and evaluation of orchestration policies (Rule / DT / RF / Q-Learning)
-- Measurement of latency, cost, resource usage and resilience
-- Reproducible experimental harness (`benchmark.py`) producing CSV + charts
-
-**Explicitly out of scope**
-- Training of new computer-vision models from scratch — YOLOv8n/s, MobileNet-SSD and EfficientDet-D0 are used as **pre-trained artefacts**
-- Development of new cloud infrastructure — the project **consumes** AWS EC2, Greengrass, S3, CloudWatch as they exist
-- Camera/OpenCV production pipeline — the visual pipeline is represented as a compute-bound proxy so that the study can isolate the decision layer
+The system is intended as a research prototype and experimental platform rather
+than a production deployment.
 
 ---
 
-## 3. Architecture
+## 3. System Architecture
 
-```
-                            AWS CLOUD
-   ┌──────────────────────────────────────────────────────────┐
-   │  EC2 (t3.medium)                                          │
-   │  ├── FastAPI  ── /api/devices, /api/models,               │
-   │  │              /api/deployments, /api/inferences         │
-   │  │              /api/decisions/{predict,train,history}    │
-   │  ├── Decision Engine  (Rule + DecisionTree + RandomForest)│
-   │  ├── SQLite  (decision history, ML artefacts)             │
-   │  └── MongoDB (live telemetry, deployments, devices)       │
-   │                                                            │
-   │  AWS IoT Greengrass v2  ── component deployments          │
-   │  S3                    ── model repository                │
-   │  CloudWatch            ── metrics & alarms                │
-   └──────────────────────────────────────────────────────────┘
-                             ▲  MQTT  ▼
-   ┌──────────────────────────────────────────────────────────┐
-   │  NVIDIA JETSON  (nano / xavier)                           │
-   │  ├── Docker runtime                                        │
-   │  ├── Greengrass Core nucleus                              │
-   │  ├── OpenCV + YOLO inference container                    │
-   │  ├── MQTT client → IoT Core                               │
-   │  └── Local buffer (offline resilience)                    │
-   └──────────────────────────────────────────────────────────┘
-```
+The implemented architecture consists of:
 
----
+### React Dashboard
 
-## 4. Tech Stack
+Provides runtime visibility of infrastructure state, AI workloads, routing
+decisions, telemetry and orchestration behaviour.
 
-| Layer              | Tech                                                    |
-| ------------------ | ------------------------------------------------------- |
-| Backend API        | Python 3.11 · FastAPI · Uvicorn                         |
-| Decision Engine    | scikit-learn (DecisionTree, RandomForest) + heuristics  |
-| Databases          | SQLite (ML/decisions) + MongoDB (telemetry)             |
-| Frontend Dashboard | React 19 · Recharts · @phosphor-icons/react · Tailwind  |
-| Edge Runtime       | Docker · OpenCV · YOLO (ONNX)                           |
-| Cloud Orchestrator | AWS IoT Greengrass v2                                   |
-| Cloud Compute      | AWS EC2                                                 |
-| Monitoring         | CloudWatch                                              |
-| Comms              | MQTT (IoT Core)                                         |
-| Analysis           | Pandas · Matplotlib (offline reports)                   |
+### FastAPI Orchestrator
 
----
+Coordinates workload requests, collects runtime information, invokes the active
+decision policy and dispatches execution to the selected Edge, Cloud or Hybrid
+route.
 
-## 5. Decision Engine
+### Edge Environment
 
-The Decision Engine takes a context vector and returns a routing decision:
+The Edge node is implemented as an Ubuntu Linux virtual machine running
+concurrently with the Windows development environment.
 
-**Input features**
-```
-network_latency_ms, connectivity, cpu_available, memory_available,
-batch_size, priority, cost_budget_usd, model_size_mb
-```
+AWS IoT Greengrass provides the Edge deployment and lifecycle-management layer.
 
-**Output classes**  `edge` · `cloud` · `hybrid`
+Implemented Greengrass component:
 
-**Engines**
+`com.edgecloud.InferenceAgent`
 
-| Engine        | Model                                       | Notes                                     |
-| ------------- | ------------------------------------------- | ----------------------------------------- |
-| Rule-Based    | Hand-crafted heuristics                     | Interpretable baseline · deterministic    |
-| DecisionTree  | `sklearn.DecisionTreeClassifier(depth=8)`   | Learns policy surface, easy to visualise  |
-| RandomForest  | `sklearn.RandomForestClassifier(n=80)`      | Robust to noise, best generalization      |
+Version:
 
-Training data (4 000 synthetic samples) is generated from the rule-based policy with 8 % label noise. Models are persisted to `backend/artefacts/*.joblib` and reloaded on startup.
+`1.1.2`
+
+### Cloud Environment
+
+Remote Cloud execution is provided by an Amazon EC2 Linux instance identified
+within the experimental environment as:
+
+`cloud-node-01`
+
+### Hybrid Execution
+
+Hybrid execution represents cooperative participation of Edge and Cloud
+resources within the same workload workflow.
+
+It is not implemented as neural-network or model partitioning.
 
 ---
 
-## 6. Local Run (Docker Compose)
+## 4. Decision Policies
 
-```bash
-docker compose up --build
-# Frontend → http://localhost
-# Backend  → http://localhost:8001/api/
-```
+### Rule-Based Policy
 
-## 7. Local Dev (without Docker)
+Provides deterministic routing according to predefined infrastructure and
+workload conditions.
 
-```bash
-# Backend
-cd backend
-pip install -r requirements.txt
-uvicorn server:app --reload --port 8001
+The policy serves as an interpretable orchestration baseline.
 
-# Frontend (separate shell)
-cd frontend
-yarn install
-yarn start
-```
+### Q-Learning Policy
 
----
+Provides adaptive routing using learned state–action values.
 
-## 8. Deploying to AWS EC2 + Greengrass
+The available actions are:
 
-1. **Provision EC2**  ·  `t3.medium`, Amazon Linux 2023, open ports 80 / 8001.
-2. **Install Docker**  ·  `sudo dnf install -y docker && sudo systemctl start docker`.
-3. **Clone repo & run**  ·  `git clone ... && cd edge-cloud-orch && docker compose up -d`.
-4. **Configure Greengrass v2 on Jetson**
-   ```bash
-   curl -sSL https://d2s8p88vqu9w66.cloudfront.net/releases/greengrass-nucleus-latest.zip -o gg.zip
-   sudo -E java -Droot="/greengrass/v2" -Dlog.store=FILE \
-        -jar ./GreengrassInstaller/lib/Greengrass.jar \
-        --aws-region us-east-1 --thing-name jetson-edge-01 \
-        --thing-group-name edge-fleet --provision true \
-        --setup-system-service true
-   ```
-5. **Publish inference component** to S3 and deploy via Greengrass console → `edge-fleet`.
-6. **Point Jetson MQTT client** at the EC2 backend URL.
+- Edge
+- Cloud
+- Hybrid
+
+Execution feedback is converted into reward information and used to update the
+Q-values associated with the observed state and selected action.
+
+Q-values and rewards are algorithm-derived decision information and are analysed
+separately from measured infrastructure performance.
 
 ---
 
-## 9. API Reference (selected)
+## 5. AI Workloads
 
-| Method | Path                                    | Purpose                              |
-| ------ | --------------------------------------- | ------------------------------------ |
-| GET    | `/api/devices`                          | List edge fleet                      |
-| POST   | `/api/devices/{id}/network`             | Toggle connectivity (simulate)       |
-| GET    | `/api/models`                           | Model repository                     |
-| POST   | `/api/deployments`                      | Deploy model → device                |
-| POST   | `/api/inferences`                       | Batch ingest inference telemetry     |
-| GET    | `/api/metrics/summary`                  | Edge vs Cloud KPI (10 min window)    |
-| POST   | `/api/decisions/predict`                | Route decision from chosen engine    |
-| POST   | `/api/decisions/train`                  | Retrain DT + RF                      |
-| GET    | `/api/decisions/status`                 | Metrics + feature importance         |
-| GET    | `/api/decisions/history`                | Recent decisions from SQLite         |
-| GET    | `/api/decisions/distribution`           | Route distribution (last N minutes)  |
+### YOLOv8
 
----
+YOLOv8 provides object-detection inference and represents a computer-vision
+workload relevant to operational visual-analysis scenarios.
 
-## 10. Evaluation Plan (for the thesis)
+### Florence-2
 
-Metrics collected per experiment (30 min run per engine):
+Florence-2 provides multimodal visual inference and enables richer
+interpretation of visual inputs than object detection alone.
 
-- **Latency (p50, p95)** — edge vs cloud vs decision-engine routing
-- **Resource usage** — Jetson CPU / memory average
-- **Cost** — total USD (edge = fixed HW · cloud = $/inference)
-- **Reliability** — success rate during simulated disconnects
-- **Decision agreement** — how often DT/RF match the rule baseline
+### Live Camera Input
 
-Reports can be exported from `/api/decisions/history` + `/api/metrics/timeseries` and analysed in Pandas / Matplotlib.
+The physical camera of the Windows host can provide live visual input to the AI
+workflow.
+
+Captured input is submitted through the orchestration pipeline and processed by
+the selected AI workload, enabling end-to-end validation from data acquisition
+to returned inference output.
 
 ---
 
-## 11. Directory Layout
+## 6. Telemetry and Runtime Monitoring
 
-```
-/app
-├── backend/
-│   ├── server.py               # FastAPI app + endpoints
-│   ├── decision_engine.py      # Rule + DT + RF engines
-│   ├── decision_db.py          # SQLite persistence
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   └── artefacts/              # trained .joblib models + decisions.db
-├── frontend/
-│   ├── src/pages/Dashboard.js  # Control-room dashboard
-│   ├── Dockerfile
-│   └── nginx.conf
-├── docker-compose.yml
-└── README.md
-```
+The orchestration environment records runtime information associated with
+workload execution and routing behaviour.
+
+Evaluation data includes:
+
+- execution latency
+- CPU utilisation
+- memory utilisation
+- network round-trip time (RTT)
+- execution success
+- policy decision time
+
+For Q-Learning experiments, Q-values and rewards are additionally retained as
+evidence of adaptive-policy behaviour.
+
+---
+
+## 7. End-to-End Execution
+
+A typical execution follows the sequence:
+
+1. A workload is submitted through the interface.
+2. FastAPI receives the request.
+3. Runtime and workload information are obtained.
+4. The active decision policy evaluates the available routes.
+5. Edge, Cloud or Hybrid execution is selected.
+6. The workload is dispatched to the selected environment.
+7. AI inference is executed.
+8. Runtime telemetry and execution outcome are recorded.
+9. Results are returned to the dashboard.
+10. Q-Learning values are updated when the adaptive policy is active.
+
+---
+
+## 8. AWS IoT Greengrass Deployment
+
+The Edge environment is integrated with AWS IoT Greengrass.
+
+Deployment lifecycle:
+
+S3 artefact  
+→ Greengrass component  
+→ Edge deployment  
+→ dependency installation  
+→ inference service startup  
+→ Edge runtime
+
+The implemented Edge inference component is:
+
+`com.edgecloud.InferenceAgent v1.1.2`
+
+---
+
+## 9. Gemini AI Assistant
+
+The dashboard additionally integrates a Gemini-based AI assistant through an
+API connection.
+
+The assistant provides a natural-language interaction layer through which users
+can query system information and obtain contextual explanations of orchestration
+results.
+
+Gemini does not perform workload-placement decisions and is not part of the
+Rule-Based or Q-Learning routing mechanism.
+
+---
+
+## 10. Experimental Evaluation
+
+The artefact supports empirical evaluation of Edge, Cloud and Hybrid execution
+and comparison of Rule-Based and Q-Learning orchestration.
+
+The principal evaluation dimensions are:
+
+- execution responsiveness
+- infrastructure resource utilisation
+- network conditions
+- execution reliability
+- routing-policy decision overhead
+- adaptive Q-Learning behaviour
+- successful AI inference execution
+
+The experimental results reported in the dissertation are based on observations
+obtained from execution of the implemented system.
+
+---
+
+## 11. Technology Stack
+
+| Layer | Technology |
+|---|---|
+| Frontend | React |
+| Backend / Orchestration | Python, FastAPI, Uvicorn |
+| Edge OS | Ubuntu Linux |
+| Edge Deployment | AWS IoT Greengrass |
+| Cloud Compute | Amazon EC2 |
+| AI Workloads | YOLOv8, Florence-2 |
+| Decision Policies | Rule-Based, Q-Learning |
+| Persistence | SQLite |
+| Live Input | PC Camera |
+| AI Assistant | Gemini API |
+
+---
+
+## 12. Repository Structure
+
+The repository contains the implementation supporting the orchestration
+workflow, including the frontend interface, FastAPI backend, decision-policy
+logic, telemetry handling and supporting deployment material.
+
+Exact directory contents may vary according to the final frozen dissertation
+release.
+
+---
+
+## 13. Security
+
+Security-sensitive information is not included in the public research artefact.
+
+The repository must not contain:
+
+- AWS access keys
+- SSH private keys
+- Gemini API keys
+- passwords
+- authentication tokens
+- `.env` files containing secrets
+- environment-specific credentials
+
+Required credentials must be supplied separately through secure environment
+configuration.
+
+---
+
+## 14. Academic Use
+
+This repository accompanies an MSc Artificial Intelligence dissertation at the
+University of Bedfordshire.
+
+The artefact is provided to support examination, reproducibility and further
+research into intelligent AI workload orchestration across heterogeneous
+Edge–Cloud environments.

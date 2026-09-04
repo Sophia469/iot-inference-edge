@@ -1,5 +1,5 @@
-"""
-Research Assistant — natural-language Q&A over experimental data.
+﻿"""
+Research Assistant â€” natural-language Q&A over experimental data.
 Powered by Google Gemini.
 Grounded in real data from the SQLite decision log, benchmark results and
 experimental artefacts.
@@ -27,75 +27,54 @@ MODEL_NAME = "gemini-2.5-flash"
 ARTEFACT_DIR = Path("/tmp/benchmark")
 
 
-SYSTEM_PROMPT = """You are the Research Assistant of the "Edge–Cloud AI Orchestrator" academic platform.
+SYSTEM_PROMPT = """You are the Research Assistant of the "Edge-Cloud AI Orchestrator" academic platform.
 
-You help the researcher analyse experimental results comparing four orchestration policies
-(Rule-Based, Decision Tree, Random Forest, Q-Learning) that route AI inference between
-NVIDIA Jetson (edge) and AWS EC2 (cloud).
+You support analysis of the implemented real Edge-Cloud orchestration system.
+
+The current infrastructure consists of:
+- Edge: edge-node-01, Linux VirtualBox VM managed through AWS IoT Greengrass.
+- Cloud: cloud-node-01 running on AWS EC2.
+- Orchestration policies: Rule-Based, Decision Tree, Random Forest and Q-Learning.
+- Execution routes: Edge, Cloud and Hybrid.
+- Real AI workloads include YOLOv8 and Florence-2.
 
 STRICT RULES:
-1. Base every claim on the JSON context you receive. NEVER invent numbers.
-2. If the requested data is not in the context, say clearly: "Not available in the current context."
-3. When comparing values, always show the exact numbers (with units and, when available, ±CI).
-4. Cite the source: scenario name, seed, engine, or SQLite timestamp.
-5. Prefer concise, structured answers. Bullet lists or small tables > walls of text.
-6. When asked to write for a thesis, produce a short academic paragraph (3-5 sentences),
-   third-person, past tense, with metrics inline.
-7. The metrics in the context are already aggregated with 95% CI when marked '±'.
-8. Default to English for all responses (this is a research platform used in academic defense).
-   Only respond in another language if the user explicitly writes to you in that language.
+1. Base every claim only on the JSON context provided. NEVER invent numbers.
+2. Prefer real infrastructure telemetry, real routing decisions and real execution measurements.
+3. Do NOT present simulated, synthetic benchmark or synthetic CI results as real experimental evidence.
+4. If a requested value is not available from real measurements, state clearly: "Not available in the current real-data context."
+5. Clearly distinguish measured values from derived algorithmic values such as Q-values, confidence or reward.
+6. When explaining a routing decision, identify the engine, selected route and the real context factors that influenced the decision when available.
+7. Never claim statistical significance unless an appropriate statistical test is explicitly present in the context.
+8. When writing for a thesis, use concise academic language and avoid claims that exceed the available evidence.
+9. Default to English because this assistant is part of an academic research platform.
+10. Only respond in another language when the user explicitly writes in that language.
+11. When explaining decision factors, clearly separate the data into these categories:
+    - Measured infrastructure conditions: network latency/RTT, connectivity, CPU availability and memory availability obtained from the live infrastructure.
+    - Workload or policy inputs: batch size, priority, cost budget and model size. These are decision inputs and must NOT be described as measured infrastructure metrics.
+    - Algorithm-derived values: Q-values, confidence, state and reward. These are outputs or internal values of the decision algorithm and must NOT be described as physical measurements.
 """
 
-
 async def build_context(
-    last_benchmark: Optional[Dict[str, Any]] = None,
-    last_ci: Optional[Dict[str, Any]] = None,
     recent_decisions: Optional[List[Dict[str, Any]]] = None,
+    live_telemetry: Optional[Dict[str, Any]] = None,
+    qlearning_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Assemble a compact, LLM-friendly context object from all data sources."""
+    """Assemble a compact context using real orchestration evidence only."""
+
     ctx: Dict[str, Any] = {
         "platform": {
             "engines": ["RuleBased", "DecisionTree", "RandomForest", "QLearning"],
             "routes": ["edge", "cloud", "hybrid"],
-            "scenarios": [],
         },
-        "last_benchmark": None,
-        "last_ci_experiment": None,
+        "live_telemetry": live_telemetry,
+        "qlearning_real_state": qlearning_state,
         "recent_decisions_sample": [],
     }
-    # scenarios list
-    try:
-        import scenarios as _s
-        ctx["platform"]["scenarios"] = _s.list_scenarios()
-    except Exception:
-        pass
 
-    if last_benchmark and last_benchmark.get("summary"):
-        ctx["last_benchmark"] = {
-            "meta": last_benchmark.get("meta"),
-            "summary": last_benchmark["summary"],
-        }
-
-    if last_ci:
-        ctx["last_ci_experiment"] = {
-            "meta": last_ci.get("meta"),
-            "aggregated": last_ci.get("aggregated"),
-        }
-    else:
-        # try loading from disk
-        ci_path = ARTEFACT_DIR / "benchmark_ci.json"
-        if ci_path.exists():
-            try:
-                data = json.loads(ci_path.read_text())
-                ctx["last_ci_experiment"] = {
-                    "meta": data.get("meta"),
-                    "aggregated": data.get("aggregated"),
-                }
-            except Exception:
-                pass
+    # Synthetic benchmark, CI and scenario data are intentionally excluded.
 
     if recent_decisions:
-        # send the most recent 15 (keeps token cost low)
         ctx["recent_decisions_sample"] = [
             {
                 "engine": d.get("engine"),
@@ -107,6 +86,7 @@ async def build_context(
             }
             for d in recent_decisions[:15]
         ]
+
     return ctx
 
 async def ask(
@@ -128,7 +108,7 @@ async def ask(
 
     prompt = (
         f"{SYSTEM_PROMPT}\n\n"
-        "EXPERIMENTAL CONTEXT (source of truth — quote from this, never invent):\n"
+        "EXPERIMENTAL CONTEXT (source of truth â€” quote from this, never invent):\n"
         f"```json\n{context_json}\n```\n\n"
         f"QUESTION: {question}"
     )
@@ -144,3 +124,7 @@ async def ask(
         "answer": response.text,
         "model": f"{MODEL_PROVIDER}/{MODEL_NAME}",
     }
+
+
+
+

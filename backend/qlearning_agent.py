@@ -1,200 +1,758 @@
 """
-Q-Learning Agent for Edge/Cloud orchestration.
+Real-Execution Q-Learning Agent for Edge/Cloud orchestration.
 
-ACADEMIC NOTE (important for the thesis):
-This agent implements SINGLE-STEP tabular Q-Learning — formally equivalent to a
-tabular *contextual bandit* since each context (state) has no temporal successor.
-The update rule collapses from
-        Q(s,a) ← Q(s,a) + α·[r + γ·max_a' Q(s',a') − Q(s,a)]
-to
-        Q(s,a) ← Q(s,a) + α·[r − Q(s,a)]
-which is still the canonical *reinforcement-learning-from-reward* formulation
-used in orchestration/routing literature. When writing the thesis, cite this as
-"tabular contextual-bandit Q-Learning" to be precise. To convert to full multi-
-step Q-Learning, chain successive contexts as (s_t, a_t, r_t, s_{t+1}) and
-propagate values through episodes of length > 1.
+FINAL RESEARCH IMPLEMENTATION
+-----------------------------
+This agent learns exclusively from REAL Edge-Cloud executions.
 
- - State  = discretised bucket of (network_latency, cpu_available, cost_budget, priority, connectivity)
- - Action = {edge, cloud, hybrid}
- - Reward = -α·latency_ms  - β·cost_usd*1000  + γ·success  - δ·resource_pressure
+Infrastructure:
+- Edge  : edge-node-01 (Ubuntu Linux VM / Oracle VirtualBox)
+- Cloud : cloud-node-01 (Ubuntu Linux / AWS EC2)
 
-Trained offline over N simulated episodes using the same environment model as
-the rule-based policy. The agent learns a policy that MINIMISES latency+cost
-while penalising unsuccessful routings (e.g. cloud when offline).
+No synthetic infrastructure telemetry, simulated latency, simulated cost,
+or simulated execution outcome is used to update the final Q-table.
+
+The agent implements SINGLE-STEP tabular Q-Learning, formally equivalent
+to a contextual bandit because each orchestration request is treated as
+an independent decision context.
+
+State:
+    discretised bucket of:
+    - network latency / AWS RTT
+    - Edge CPU availability
+    - cost budget
+    - workload priority
+    - Cloud connectivity
+
+Actions:
+    - edge
+    - cloud
+    - hybrid
+
+Learning cycle:
+    REAL TELEMETRY
+        -> STATE
+        -> ACTION
+        -> REAL EXECUTION
+        -> REAL RESULT
+        -> REAL REWARD
+        -> Q-TABLE UPDATE
+
+Update rule:
+
+    Q(s,a) <- Q(s,a) + alpha * [reward - Q(s,a)]
+
+The reward is calculated only after an actual execution has occurred.
 """
+
 from __future__ import annotations
+
+import json
 import random
 import time
 from pathlib import Path
-from typing import Tuple, Dict, Any
-import json
+from typing import Any, Dict
+
 import numpy as np
 
-from decision_engine import DecisionContext, ROUTES, _wrap, DecisionResult
+from decision_engine import (
+    DecisionContext,
+    DecisionResult,
+    ROUTES,
+    _wrap,
+)
+
+
+# ============================================================
+# Persistence
+# ============================================================
 
 ARTEFACT_DIR = Path(__file__).parent / "artefacts"
 ARTEFACT_DIR.mkdir(exist_ok=True)
-Q_TABLE_PATH = ARTEFACT_DIR / "qlearning.npy"
-Q_META_PATH = ARTEFACT_DIR / "qlearning_meta.json"
 
-# ---- State discretisation ----
-# 3 buckets net, 3 cpu, 2 cost, 3 priority, 2 connectivity => 3*3*2*3*2 = 108 states
-NET_BUCKETS = [80.0, 250.0]           # <80 low, <250 mid, else high (or offline)
-CPU_BUCKETS = [30.0, 60.0]            # low <30, mid <60, high
-COST_BUCKETS = [0.05]                 # tight <=0.05, loose otherwise
-PRI_BUCKETS = [2, 4]                  # low <=2, mid <=4, high otherwise
+# IMPORTANT:
+# Separate artefacts from the old simulated Q-table.
+# This prevents simulated historical values from contaminating
+# the final real-infrastructure experiment.
+Q_TABLE_PATH = ARTEFACT_DIR / "qlearning_real.npy"
+Q_META_PATH = ARTEFACT_DIR / "qlearning_real_meta.json"
+
+
+# ============================================================
+# State discretisation
+# ============================================================
+
+# 3 network buckets
+# 3 CPU buckets
+# 2 cost buckets
+# 3 priority buckets
+# 2 connectivity buckets
+#
+# 3 * 3 * 2 * 3 * 2 = 108 states
+
+NET_BUCKETS = [80.0, 250.0]
+CPU_BUCKETS = [30.0, 60.0]
+COST_BUCKETS = [0.05]
+PRI_BUCKETS = [2, 4]
 
 N_NET = 3
 N_CPU = 3
 N_COST = 2
 N_PRI = 3
 N_CONN = 2
-N_ACTIONS = len(ROUTES)  # 3
+
+N_ACTIONS = len(ROUTES)
 
 
 def _bucket(value: float, edges) -> int:
-    for i, e in enumerate(edges):
-        if value < e:
+    """
+    Convert a continuous value into a discrete bucket.
+    """
+    for i, edge in enumerate(edges):
+        if value < edge:
             return i
+
     return len(edges)
 
 
 def state_index(ctx: DecisionContext) -> int:
+    """
+    Convert a REAL infrastructure context into one of 108 states.
+    """
+
+    # Cloud unavailable -> worst network state
     if ctx.connectivity == 0:
-        n = 2  # offline -> treat as worst net bucket
+        network_bucket = 2
     else:
-        n = _bucket(ctx.network_latency_ms, NET_BUCKETS)
-    c = _bucket(ctx.cpu_available, CPU_BUCKETS)
-    co = _bucket(ctx.cost_budget_usd, COST_BUCKETS)
-    p = _bucket(ctx.priority, PRI_BUCKETS)
-    k = ctx.connectivity
-    # multi-dim flatten
-    return ((((n * N_CPU + c) * N_COST + co) * N_PRI + p) * N_CONN + k)
+        network_bucket = _bucket(
+            ctx.network_latency_ms,
+            NET_BUCKETS,
+        )
+
+    cpu_bucket = _bucket(
+        ctx.cpu_available,
+        CPU_BUCKETS,
+    )
+
+    cost_bucket = _bucket(
+        ctx.cost_budget_usd,
+        COST_BUCKETS,
+    )
+
+    priority_bucket = _bucket(
+        ctx.priority,
+        PRI_BUCKETS,
+    )
+
+    connectivity_bucket = int(ctx.connectivity)
+
+    return (
+        (
+            (
+                (
+                    network_bucket * N_CPU
+                    + cpu_bucket
+                )
+                * N_COST
+                + cost_bucket
+            )
+            * N_PRI
+            + priority_bucket
+        )
+        * N_CONN
+        + connectivity_bucket
+    )
 
 
-N_STATES = N_NET * N_CPU * N_COST * N_PRI * N_CONN
+N_STATES = (
+    N_NET
+    * N_CPU
+    * N_COST
+    * N_PRI
+    * N_CONN
+)
 
 
-# ---- Environment reward model ----
-def simulate_outcome(ctx: DecisionContext, action_idx: int) -> Tuple[float, bool]:
-    """Return (reward, success). Success = the action was executable."""
-    route = ROUTES[action_idx]
-    # If offline and route needs cloud -> failure
-    if ctx.connectivity == 0 and route in ("cloud", "hybrid"):
-        return -50.0, False
-    if ctx.cost_budget_usd <= 0 and route in ("cloud", "hybrid"):
-        return -30.0, False
-
-    # Latency model
-    if route == "edge":
-        latency = random.uniform(18, 42) + max(0, (80 - ctx.cpu_available)) * 0.3
-        cost = 0.00002
-        resource_pressure = max(0, 70 - ctx.cpu_available) * 0.05
-    elif route == "cloud":
-        latency = ctx.network_latency_ms + random.uniform(30, 120)
-        cost = 0.00085 * ctx.batch_size
-        resource_pressure = 0.0
-    else:  # hybrid
-        latency = max(35, ctx.network_latency_ms * 0.5) + random.uniform(15, 50)
-        cost = 0.0005 * ctx.batch_size
-        resource_pressure = max(0, 70 - ctx.cpu_available) * 0.03
-
-    # Priority weighting: high priority pays more for lower latency
-    latency_penalty = latency * (0.05 + 0.02 * ctx.priority)
-    cost_penalty = cost * 1000.0 * (2.0 - 0.15 * ctx.priority)
-    reward = -latency_penalty - cost_penalty - resource_pressure + 5.0  # base success bonus
-    return reward, True
-
+# ============================================================
+# Q-Learning Agent
+# ============================================================
 
 class QLearningAgent:
-    def __init__(self, alpha: float = 0.15, gamma: float = 0.9,
-                 eps_start: float = 0.9, eps_end: float = 0.05):
-        self.q = np.zeros((N_STATES, N_ACTIONS), dtype=float)
+    """
+    Q-Learning agent that learns only from real executions.
+    """
+
+    def __init__(
+        self,
+        alpha: float = 0.15,
+        gamma: float = 0.9,
+        exploration_rate: float = 0.10,
+    ):
+        self.q = np.zeros(
+            (N_STATES, N_ACTIONS),
+            dtype=float,
+        )
+
         self.alpha = alpha
         self.gamma = gamma
-        self.eps_start = eps_start
-        self.eps_end = eps_end
+
+        # 10% controlled exploration using REAL executions.
+        self.exploration_rate = exploration_rate
+
         self.trained = False
-        self.metrics: Dict[str, Any] = {}
-        self._load()
 
-    # persistence
-    def _load(self) -> bool:
-        if Q_TABLE_PATH.exists() and Q_META_PATH.exists():
-            self.q = np.load(Q_TABLE_PATH)
-            self.metrics = json.loads(Q_META_PATH.read_text())
-            self.trained = True
-            return True
-        return False
-
-    def _save(self) -> None:
-        np.save(Q_TABLE_PATH, self.q)
-        Q_META_PATH.write_text(json.dumps(self.metrics))
-
-    def train(self, episodes: int = 5000) -> Dict[str, Any]:
-        from decision_engine import _sample_context
-        rewards_history = []
-        route_counts = {r: 0 for r in ROUTES}
-        for ep in range(episodes):
-            eps = self.eps_end + (self.eps_start - self.eps_end) * max(0.0, 1 - ep / (episodes * 0.7))
-            ctx = _sample_context()
-            s = state_index(ctx)
-            # epsilon-greedy
-            if random.random() < eps:
-                a = random.randint(0, N_ACTIONS - 1)
-            else:
-                a = int(np.argmax(self.q[s]))
-            reward, _ = simulate_outcome(ctx, a)
-            # Terminal-like (single step episode); just update towards reward
-            self.q[s, a] += self.alpha * (reward - self.q[s, a])
-            rewards_history.append(reward)
-            route_counts[ROUTES[a]] += 1
-
-        mean_last_500 = float(np.mean(rewards_history[-500:]))
-        self.metrics = {
-            "episodes": episodes,
-            "alpha": self.alpha,
-            "gamma": self.gamma,
-            "mean_reward_last_500": round(mean_last_500, 3),
-            "route_distribution_training": route_counts,
+        self.metrics: Dict[str, Any] = {
+            "learning_mode": "real_execution_only",
+            "real_updates": 0,
             "n_states": N_STATES,
             "n_actions": N_ACTIONS,
-            "trained_at": time.time(),
-            "converged_greedy_ratio": round(float(np.mean(np.max(self.q, axis=1) > 0)), 3),
+            "alpha": self.alpha,
+            "gamma": self.gamma,
+            "exploration_rate": self.exploration_rate,
         }
+
+        self._load()
+
+
+    # ========================================================
+    # Persistence
+    # ========================================================
+
+    def _load(self) -> bool:
+        """
+        Load only the REAL-execution Q-table.
+
+        Historical qlearning.npy generated from simulated training
+        is deliberately ignored.
+        """
+
+        if (
+            Q_TABLE_PATH.exists()
+            and Q_META_PATH.exists()
+        ):
+            self.q = np.load(Q_TABLE_PATH)
+
+            self.metrics = json.loads(
+                Q_META_PATH.read_text()
+            )
+
+            self.trained = (
+                int(
+                    self.metrics.get(
+                        "real_updates",
+                        0,
+                    )
+                )
+                > 0
+            )
+
+            return True
+
+        return False
+
+
+    def _save(self) -> None:
+        """
+        Persist the real Q-table and metadata.
+        """
+
+        np.save(
+            Q_TABLE_PATH,
+            self.q,
+        )
+
+        Q_META_PATH.write_text(
+            json.dumps(
+                self.metrics,
+                indent=2,
+            )
+        )
+
+
+    # ========================================================
+    # Simulated training deliberately disabled
+    # ========================================================
+
+    def train(
+        self,
+        episodes: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Offline/simulated training is intentionally disabled
+        in the final research implementation.
+
+        The agent learns through learn_from_real_execution().
+        """
+
+        raise RuntimeError(
+            "Simulated Q-Learning training is disabled. "
+            "The final agent learns only from real "
+            "Edge-Cloud executions."
+        )
+
+
+    # ========================================================
+    # Real decision
+    # ========================================================
+
+    def predict(
+        self,
+        ctx: DecisionContext,
+    ) -> DecisionResult:
+        """
+        Select EDGE, CLOUD or HYBRID from the current REAL
+        infrastructure context.
+
+        During early learning, controlled epsilon-greedy exploration
+        allows the agent to collect real experience from different
+        execution routes.
+        """
+
+        start = time.perf_counter()
+
+        state = state_index(ctx)
+
+        q_values = self.q[state]
+
+        exploration = False
+
+
+        # ----------------------------------------------------
+        # Cloud unavailable
+        # ----------------------------------------------------
+
+        if ctx.connectivity == 0:
+            action = ROUTES.index("edge")
+
+            reason_text = (
+                f"state={state} · cloud unavailable · "
+                f"forcing safe EDGE route · "
+                f"Q={q_values.round(2).tolist()}"
+            )
+
+
+        # ----------------------------------------------------
+        # Controlled REAL exploration
+        # ----------------------------------------------------
+
+        elif random.random() < self.exploration_rate:
+            action = random.randint(
+                0,
+                N_ACTIONS - 1,
+            )
+
+            exploration = True
+
+            reason_text = (
+                f"state={state} · "
+                f"real exploration · "
+                f"Q={q_values.round(2).tolist()}"
+            )
+
+
+        # ----------------------------------------------------
+        # Exploitation
+        # ----------------------------------------------------
+
+        else:
+            action = int(
+                np.argmax(q_values)
+            )
+
+            reason_text = (
+                f"state={state} · "
+                f"real learned policy · "
+                f"Q={q_values.round(2).tolist()}"
+            )
+
+
+        # ----------------------------------------------------
+        # Probability display
+        # ----------------------------------------------------
+
+        q_shifted = (
+            q_values
+            - q_values.max()
+        )
+
+        exp_q = np.exp(q_shifted)
+
+        probs_array = (
+            exp_q
+            / (
+                exp_q.sum()
+                + 1e-9
+            )
+        )
+
+        probabilities = {
+            route: float(
+                round(
+                    probs_array[i],
+                    4,
+                )
+            )
+            for i, route
+            in enumerate(ROUTES)
+        }
+
+
+        # During cold start all Q-values are equal.
+        # Probability values therefore appear approximately equal.
+        confidence = probabilities[
+            ROUTES[action]
+        ]
+
+
+        if exploration:
+            reason_text += (
+                f" · selected={ROUTES[action]}"
+            )
+
+
+        return _wrap(
+            ROUTES[action],
+            confidence,
+            "QLearning",
+            [reason_text],
+            probabilities,
+            start,
+        )
+
+
+    # ========================================================
+    # REAL LEARNING
+    # ========================================================
+
+    def learn_from_real_execution(
+        self,
+        ctx: DecisionContext,
+        route: str,
+        latency_ms: float,
+        success: bool,
+        cost_usd: float = 0.0,
+        resource_pressure: float = 0.0,
+        failover_applied: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Update the Q-table using the observed result of an
+        ACTUAL Edge/Cloud/Hybrid execution.
+
+        No random latency.
+        No simulated infrastructure.
+        No simulated success/failure.
+        """
+
+        if route not in ROUTES:
+            raise ValueError(
+                f"Unknown execution route: {route}"
+            )
+
+
+        state = state_index(ctx)
+
+        action = ROUTES.index(route)
+
+
+        # ----------------------------------------------------
+        # Real reward
+        # ----------------------------------------------------
+
+        if success:
+
+            # Higher priority makes latency more important.
+            latency_penalty = (
+                float(latency_ms)
+                * (
+                    0.05
+                    + 0.02
+                    * ctx.priority
+                )
+            )
+
+
+            # Actual measured/derived monetary execution cost.
+            cost_penalty = (
+                float(cost_usd)
+                * 1000.0
+                * (
+                    2.0
+                    - 0.15
+                    * ctx.priority
+                )
+            )
+
+
+            reward = (
+                5.0
+                - latency_penalty
+                - cost_penalty
+                - float(resource_pressure)
+            )
+
+
+            # A failover means the original orchestration decision
+            # could not be executed as intended.
+            if failover_applied:
+                reward -= 5.0
+
+
+        else:
+
+            # Strong penalty for an actual failed execution.
+            reward = -50.0
+
+
+        # ----------------------------------------------------
+        # Q update
+        # ----------------------------------------------------
+
+        old_q = float(
+            self.q[state, action]
+        )
+
+
+        self.q[state, action] += (
+            self.alpha
+            * (
+                reward
+                - self.q[state, action]
+            )
+        )
+
+
+        new_q = float(
+            self.q[state, action]
+        )
+
+
+        # ----------------------------------------------------
+        # Metrics
+        # ----------------------------------------------------
+
+        real_updates = (
+            int(
+                self.metrics.get(
+                    "real_updates",
+                    0,
+                )
+            )
+            + 1
+        )
+
+
+        self.metrics.update(
+            {
+                "learning_mode":
+                    "real_execution_only",
+
+                "real_updates":
+                    real_updates,
+
+                "last_real_reward":
+                    round(
+                        float(reward),
+                        4,
+                    ),
+
+                "last_real_state":
+                    int(state),
+
+                "last_real_action":
+                    route,
+
+                "last_real_latency_ms":
+                    round(
+                        float(latency_ms),
+                        4,
+                    ),
+
+                "last_real_success":
+                    bool(success),
+
+                "last_real_cost_usd":
+                    round(
+                        float(cost_usd),
+                        8,
+                    ),
+
+                "last_real_resource_pressure":
+                    round(
+                        float(resource_pressure),
+                        4,
+                    ),
+
+                "last_failover_applied":
+                    bool(failover_applied),
+
+                "last_real_update_at":
+                    time.time(),
+
+                "n_states":
+                    N_STATES,
+
+                "n_actions":
+                    N_ACTIONS,
+
+                "alpha":
+                    self.alpha,
+
+                "gamma":
+                    self.gamma,
+
+                "exploration_rate":
+                    self.exploration_rate,
+            }
+        )
+
+
         self.trained = True
+
         self._save()
-        return self.metrics
 
-    def predict(self, ctx: DecisionContext) -> DecisionResult:
-        if not self.trained:
-            raise RuntimeError("QLearning agent not trained yet")
-        t0 = time.perf_counter()
-        s = state_index(ctx)
-        q_values = self.q[s]
-        a = int(np.argmax(q_values))
-        # softmax over Q-values for probability display
-        z = q_values - q_values.max()
-        exp_z = np.exp(z)
-        probs_arr = exp_z / (exp_z.sum() + 1e-9)
-        probs = {r: float(round(probs_arr[i], 4)) for i, r in enumerate(ROUTES)}
-        confidence = probs[ROUTES[a]]
-        reason = f"state={s} · Q={q_values.round(2).tolist()}"
-        return _wrap(ROUTES[a], confidence, "QLearning", [reason], probs, t0)
 
-    def q_table_summary(self, top_states: int = 12) -> Dict[str, Any]:
-        # returns top-N most-visited (highest max Q) states with their preferred action
-        indices = np.argsort(-np.max(self.q, axis=1))[:top_states]
+        return {
+            "learning_mode":
+                "real_execution_only",
+
+            "state":
+                int(state),
+
+            "action":
+                route,
+
+            "reward":
+                round(
+                    float(reward),
+                    4,
+                ),
+
+            "old_q":
+                round(
+                    old_q,
+                    4,
+                ),
+
+            "new_q":
+                round(
+                    new_q,
+                    4,
+                ),
+
+            "real_updates":
+                real_updates,
+
+            "success":
+                bool(success),
+
+            "latency_ms":
+                round(
+                    float(latency_ms),
+                    4,
+                ),
+
+            "cost_usd":
+                round(
+                    float(cost_usd),
+                    8,
+                ),
+
+            "failover_applied":
+                bool(failover_applied),
+        }
+
+
+    # ========================================================
+    # Q-table inspection
+    # ========================================================
+
+    def q_table_summary(
+        self,
+        top_states: int = 12,
+    ) -> Dict[str, Any]:
+        """
+        Return the strongest currently learned REAL states.
+        """
+
+        indices = np.argsort(
+            -np.max(
+                self.q,
+                axis=1,
+            )
+        )[:top_states]
+
+
         rows = []
-        for idx in indices:
-            best_action = int(np.argmax(self.q[idx]))
-            rows.append({
-                "state": int(idx),
-                "q_values": [round(float(v), 2) for v in self.q[idx]],
-                "best_route": ROUTES[best_action],
-                "max_q": round(float(np.max(self.q[idx])), 3),
-            })
-        return {"rows": rows, "features_encoded": ["network_latency", "cpu_available", "cost_budget", "priority", "connectivity"]}
 
+        for index in indices:
+
+            best_action = int(
+                np.argmax(
+                    self.q[index]
+                )
+            )
+
+            rows.append(
+                {
+                    "state":
+                        int(index),
+
+                    "q_values":
+                        [
+                            round(
+                                float(value),
+                                4,
+                            )
+                            for value
+                            in self.q[index]
+                        ],
+
+                    "best_route":
+                        ROUTES[
+                            best_action
+                        ],
+
+                    "max_q":
+                        round(
+                            float(
+                                np.max(
+                                    self.q[index]
+                                )
+                            ),
+                            4,
+                        ),
+                }
+            )
+
+
+        return {
+            "learning_mode":
+                "real_execution_only",
+
+            "real_updates":
+                int(
+                    self.metrics.get(
+                        "real_updates",
+                        0,
+                    )
+                ),
+
+            "rows":
+                rows,
+
+            "features_encoded":
+                [
+                    "network_latency",
+                    "cpu_available",
+                    "cost_budget",
+                    "priority",
+                    "connectivity",
+                ],
+        }
+
+
+# ============================================================
+# Shared agent instance
+# ============================================================
 
 qlearning_agent = QLearningAgent()

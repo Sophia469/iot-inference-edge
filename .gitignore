@@ -85,3 +85,22 @@ frontend/node_modules/.cache/default-development/0.pack
 backend/.env
 backend/.venv/
 backend/artefacts/decisions.db
+# Backups created during development
+*.before-*
+*.before*
+*.backup
+*.backup*
+*_backup*
+*backup*
+Dashboard_NEW.js
+
+# Local/generated runtime data
+backend/runtime/
+backend/models/
+backend/test_images/
+backend/artefacts/*.db
+
+# Temporary evidence/files
+bus.jpg
+hotel_scenario_block.txt
+test_real_evidence.pdf

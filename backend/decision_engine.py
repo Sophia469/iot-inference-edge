@@ -1,51 +1,97 @@
-"""
-Decision Engine — Edge/Cloud Orchestration
-Given real-time context (network, load, cost, model), decides where to route inference:
- - edge   : run locally on Jetson (low latency, low cost, offline-tolerant)
- - cloud  : offload to AWS EC2 (high accuracy models, heavy load)
- - hybrid : run on edge + async replicate to cloud for logging/re-check
+﻿"""
+Decision Engine â€” Edge/Cloud Orchestration
 
-Three engines implemented:
- 1. RuleBased      — hand-crafted heuristics (interpretable baseline)
- 2. DecisionTree   — sklearn DecisionTreeClassifier
- 3. RandomForest   — sklearn RandomForestClassifier
+LIVE DECISION PATH
+------------------
+The decision engines receive a DecisionContext supplied by the
+orchestrator.
 
-Training data is synthesized from the same rule-based policy + gaussian noise
-so the ML models learn a realistic (but non-trivial) policy surface.
+In LIVE mode this context is populated from real infrastructure
+measurements collected by server.py:
+
+- real Edge CPU availability
+- real Edge memory availability
+- real AWS connectivity
+- real Orchestrator -> AWS RTT
+- real workload parameters
+
+No random infrastructure values are generated during LIVE prediction.
+
+SUPPORTED POLICIES
+------------------
+1. RuleBased
+   Interpretable hand-crafted baseline.
+
+2. DecisionTree
+   sklearn DecisionTreeClassifier.
+
+3. RandomForest
+   sklearn RandomForestClassifier.
+
+4. QLearning
+   Reinforcement-learning orchestration policy.
+
+TRAINING / BENCHMARK NOTE
+-------------------------
+Decision Tree and Random Forest may be trained using the reproducible
+synthetic dataset defined in this module.
+
+That training dataset is deliberately isolated from the LIVE inference
+path. Synthetic contexts are never substituted for real telemetry
+during live orchestration.
+
+Q-Learning training is implemented in qlearning_agent.py.
 """
+
 from __future__ import annotations
-import os
-import json
+
 import time
 import random
 from pathlib import Path
-from dataclasses import dataclass, asdict
-from typing import Literal, List, Dict, Any, Optional, Tuple
+from dataclasses import dataclass
+from typing import Literal, List, Dict, Any, Tuple
 
 import numpy as np
+import joblib
+
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
-import joblib
 
+
+# =========================================================
+# Configuration
+# =========================================================
 
 ARTEFACT_DIR = Path(__file__).parent / "artefacts"
 ARTEFACT_DIR.mkdir(exist_ok=True)
 
+
 Route = Literal["edge", "cloud", "hybrid"]
-ROUTES: List[Route] = ["edge", "cloud", "hybrid"]
-FEATURES = [
-    "network_latency_ms",   # 0 = offline (very high in practice)
-    "connectivity",         # 0/1 (offline/online)
-    "cpu_available",        # 0..100
-    "memory_available",     # 0..100
-    "batch_size",           # 1..32
-    "priority",             # 1..5 (5 = critical, prefers accuracy)
-    "cost_budget_usd",      # remaining $ per hour
-    "model_size_mb",        # bigger => favor cloud
+
+ROUTES: List[Route] = [
+    "edge",
+    "cloud",
+    "hybrid",
 ]
 
+
+FEATURES = [
+    "network_latency_ms",
+    "connectivity",
+    "cpu_available",
+    "memory_available",
+    "batch_size",
+    "priority",
+    "cost_budget_usd",
+    "model_size_mb",
+]
+
+
+# =========================================================
+# Data structures
+# =========================================================
 
 @dataclass
 class DecisionContext:
@@ -59,7 +105,15 @@ class DecisionContext:
     model_size_mb: float
 
     def as_vector(self) -> np.ndarray:
-        return np.array([[getattr(self, f) for f in FEATURES]], dtype=float)
+        """
+        Convert the decision context to the feature vector expected
+        by the ML policies.
+        """
+
+        return np.array(
+            [[getattr(self, feature) for feature in FEATURES]],
+            dtype=float,
+        )
 
 
 @dataclass
@@ -72,217 +126,992 @@ class DecisionResult:
     latency_us: float
 
 
-# ---------- 1. Rule-Based ----------
-def rule_based_decide(ctx: DecisionContext) -> DecisionResult:
-    t0 = time.perf_counter()
-    reasons = []
-    # Hard rules
+# =========================================================
+# Shared helpers
+# =========================================================
+
+def _normalize(values: Dict[str, float]) -> None:
+    """
+    Normalise route probabilities in-place.
+    """
+
+    total = sum(values.values())
+
+    if total <= 0:
+        uniform = 1.0 / len(values)
+
+        for key in values:
+            values[key] = uniform
+
+        return
+
+    for key in values:
+        values[key] = values[key] / total
+
+
+def _wrap(
+    route: Route,
+    confidence: float,
+    engine: str,
+    reasons: List[str],
+    probabilities: Dict[str, float],
+    started_at: float,
+) -> DecisionResult:
+
+    return DecisionResult(
+        route=route,
+
+        confidence=round(
+            float(confidence),
+            4,
+        ),
+
+        engine=engine,
+
+        reason=(
+            "; ".join(reasons)
+            if reasons
+            else "default policy"
+        ),
+
+        probabilities={
+            key: round(float(value), 4)
+            for key, value in probabilities.items()
+        },
+
+        latency_us=round(
+            (
+                time.perf_counter()
+                - started_at
+            )
+            * 1_000_000,
+            2,
+        ),
+    )
+
+
+# =========================================================
+# 1. Rule-Based Policy
+# =========================================================
+
+def rule_based_decide(
+    ctx: DecisionContext,
+) -> DecisionResult:
+    """
+    Interpretable baseline policy.
+
+    IMPORTANT:
+    This function does not generate infrastructure values.
+
+    It only evaluates the DecisionContext supplied by the caller.
+    In LIVE mode those values come from real infrastructure telemetry.
+    """
+
+    started_at = time.perf_counter()
+
+    reasons: List[str] = []
+
+    # -----------------------------------------------------
+    # Hard constraints
+    # -----------------------------------------------------
+
     if ctx.connectivity == 0:
-        reasons.append("offline → edge only")
-        return _wrap("edge", 1.0, "RuleBased", reasons, {"edge": 1.0, "cloud": 0.0, "hybrid": 0.0}, t0)
+
+        reasons.append(
+            "cloud unavailable -> edge only"
+        )
+
+        return _wrap(
+            "edge",
+            1.0,
+            "RuleBased",
+            reasons,
+            {
+                "edge": 1.0,
+                "cloud": 0.0,
+                "hybrid": 0.0,
+            },
+            started_at,
+        )
 
     if ctx.cost_budget_usd <= 0.001:
-        reasons.append("cost budget exhausted → edge only")
-        return _wrap("edge", 0.95, "RuleBased", reasons, {"edge": 0.95, "cloud": 0.02, "hybrid": 0.03}, t0)
 
-    # Score cloud
+        reasons.append(
+            "cost budget exhausted -> edge only"
+        )
+
+        return _wrap(
+            "edge",
+            0.95,
+            "RuleBased",
+            reasons,
+            {
+                "edge": 0.95,
+                "cloud": 0.02,
+                "hybrid": 0.03,
+            },
+            started_at,
+        )
+
+    # -----------------------------------------------------
+    # Cloud suitability score
+    # -----------------------------------------------------
+
     cloud_score = 0.0
+
+    # Low AWS RTT makes cloud execution more attractive.
     if ctx.network_latency_ms < 80:
+
         cloud_score += 0.25
-        reasons.append("net<80ms")
+        reasons.append("cloud RTT < 80 ms")
+
+    # Low Edge CPU availability favours offloading.
     if ctx.cpu_available < 40:
+
         cloud_score += 0.30
-        reasons.append("cpu low")
+        reasons.append("edge CPU availability < 40%")
+
+    # Low Edge memory availability favours offloading.
     if ctx.memory_available < 40:
+
         cloud_score += 0.20
-        reasons.append("mem low")
+        reasons.append("edge memory availability < 40%")
+
+    # Larger batches are better candidates for cloud execution.
     if ctx.batch_size >= 8:
+
         cloud_score += 0.15
-        reasons.append("batch≥8")
-    if ctx.model_size_mb >= 20:
+        reasons.append("batch size >= 8")
+
+    # Model footprint represents workload compute demand.
+    # Very large models strongly favour cloud execution, while
+    # lightweight models retain the latency/cost benefits of Edge.
+    if ctx.model_size_mb >= 300:
+
+        cloud_score += 0.65
+        reasons.append(
+            f"large AI workload ({ctx.model_size_mb:.1f} MB) "
+            "strongly favours cloud compute"
+        )
+
+    elif ctx.model_size_mb >= 20:
+
         cloud_score += 0.15
-        reasons.append("model≥20MB")
+        reasons.append(
+            f"model size {ctx.model_size_mb:.1f} MB favours cloud"
+        )
+
+    # High-priority workloads can favour cloud processing.
     if ctx.priority >= 4:
+
         cloud_score += 0.20
-        reasons.append("prio≥4")
+        reasons.append("priority >= 4")
+
+    cloud_score = min(
+        max(cloud_score, 0.0),
+        1.0,
+    )
 
     edge_score = 1.0 - cloud_score
 
-    # Hybrid when clearly borderline + connectivity ok + cost ok
-    if 0.35 <= cloud_score <= 0.60 and ctx.cost_budget_usd > 0.01:
-        route = "hybrid"
-        probs = {"edge": edge_score * 0.6, "cloud": cloud_score * 0.6, "hybrid": 0.4}
-        _normalize(probs)
-        reasons.append("borderline → hybrid replicate")
+    # -----------------------------------------------------
+    # Route selection
+    # -----------------------------------------------------
+
+    # Cooperative Hybrid:
+    # A very large AI workload can benefit from splitting
+    # complementary work across healthy Edge and Cloud nodes.
+    #
+    # In the vision pipeline:
+    #   Edge  -> YOLO object detection
+    #   Cloud -> Florence-2 semantic interpretation
+    cooperative_hybrid = (
+        ctx.model_size_mb >= 300
+        and ctx.connectivity == 1
+        and ctx.cpu_available >= 50
+        and ctx.memory_available >= 40
+        and ctx.network_latency_ms <= 150
+        and ctx.cost_budget_usd > 0.01
+    )
+
+    if cooperative_hybrid:
+
+        route: Route = "hybrid"
+
+        probabilities = {
+            "edge": 0.20,
+            "cloud": 0.30,
+            "hybrid": 0.50,
+        }
+
+        reasons.append(
+            "cooperative Edge-Cloud execution selected: "
+            f"large AI workload ({ctx.model_size_mb:.1f} MB), "
+            f"Edge capacity healthy "
+            f"(CPU available {ctx.cpu_available:.1f}%, "
+            f"memory available {ctx.memory_available:.1f}%), "
+            f"AWS RTT {ctx.network_latency_ms:.1f} ms"
+        )
+
+    elif (
+        0.35 <= cloud_score <= 0.60
+        and ctx.cost_budget_usd > 0.01
+    ):
+
+        route: Route = "hybrid"
+
+        probabilities = {
+            "edge": edge_score * 0.6,
+            "cloud": cloud_score * 0.6,
+            "hybrid": 0.4,
+        }
+
+        _normalize(probabilities)
+
+        reasons.append(
+            "borderline conditions -> hybrid"
+        )
+
     elif cloud_score > 0.5:
+
         route = "cloud"
-        probs = {"edge": edge_score, "cloud": cloud_score, "hybrid": 0.0}
-        _normalize(probs)
+
+        probabilities = {
+            "edge": edge_score,
+            "cloud": cloud_score,
+            "hybrid": 0.0,
+        }
+
+        _normalize(probabilities)
+
     else:
+
         route = "edge"
-        probs = {"edge": edge_score, "cloud": cloud_score, "hybrid": 0.0}
-        _normalize(probs)
 
-    return _wrap(route, probs[route], "RuleBased", reasons, probs, t0)
+        probabilities = {
+            "edge": edge_score,
+            "cloud": cloud_score,
+            "hybrid": 0.0,
+        }
 
+        _normalize(probabilities)
 
-def _normalize(d: Dict[str, float]) -> None:
-    s = sum(d.values())
-    if s <= 0:
-        for k in d:
-            d[k] = 1.0 / len(d)
-        return
-    for k in d:
-        d[k] = d[k] / s
+        reasons.append(
+            "edge selected: local resources sufficient "
+            f"(CPU available {ctx.cpu_available:.1f}%, "
+            f"memory available {ctx.memory_available:.1f}%), "
+            f"AWS RTT {ctx.network_latency_ms:.1f} ms, "
+            f"cloud suitability score {cloud_score:.2f}"
+        )
 
-
-def _wrap(route: Route, conf: float, engine: str, reasons: List[str],
-          probs: Dict[str, float], t0: float) -> DecisionResult:
-    return DecisionResult(
-        route=route,
-        confidence=round(float(conf), 4),
-        engine=engine,
-        reason="; ".join(reasons) if reasons else "default policy",
-        probabilities={k: round(float(v), 4) for k, v in probs.items()},
-        latency_us=round((time.perf_counter() - t0) * 1_000_000, 2),
+    return _wrap(
+        route,
+        probabilities[route],
+        "RuleBased",
+        reasons,
+        probabilities,
+        started_at,
     )
 
 
-# ---------- 2 & 3. ML engines ----------
+# =========================================================
+# 2 & 3. Decision Tree / Random Forest
+# =========================================================
+
 class MLDecisionEngine:
-    """Wraps a sklearn estimator with train/predict/persist."""
-    def __init__(self, name: str, estimator):
+    """
+    Wrapper for a sklearn orchestration estimator.
+
+    Training data may be synthetic/reproducible.
+
+    Prediction itself always uses the DecisionContext supplied
+    by the caller.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        estimator,
+    ):
+
         self.name = name
         self.estimator = estimator
-        self.trained = False
-        self.metrics: Dict[str, Any] = {}
-        self.path = ARTEFACT_DIR / f"{name.lower()}.joblib"
 
-    def train(self, X: np.ndarray, y: np.ndarray) -> Dict[str, Any]:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=y)
-        self.estimator.fit(X_train, y_train)
-        y_pred = self.estimator.predict(X_test)
-        acc = float(accuracy_score(y_test, y_pred))
+        self.trained = False
+
+        self.metrics: Dict[str, Any] = {}
+
+        self.path = (
+            ARTEFACT_DIR
+            / f"{name.lower()}.joblib"
+        )
+
+    def train(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+    ) -> Dict[str, Any]:
+
+        (
+            X_train,
+            X_test,
+            y_train,
+            y_test,
+        ) = train_test_split(
+            X,
+            y,
+            test_size=0.25,
+            random_state=42,
+            stratify=y,
+        )
+
+        self.estimator.fit(
+            X_train,
+            y_train,
+        )
+
+        y_pred = self.estimator.predict(
+            X_test
+        )
+
+        accuracy = float(
+            accuracy_score(
+                y_test,
+                y_pred,
+            )
+        )
+
         self.trained = True
-        importances = getattr(self.estimator, "feature_importances_", None)
+
+        importances = getattr(
+            self.estimator,
+            "feature_importances_",
+            None,
+        )
+
         self.metrics = {
-            "accuracy": round(acc, 4),
-            "n_train": int(len(X_train)),
-            "n_test": int(len(X_test)),
+            "accuracy": round(
+                accuracy,
+                4,
+            ),
+
+            "n_train": int(
+                len(X_train)
+            ),
+
+            "n_test": int(
+                len(X_test)
+            ),
+
             "trained_at": time.time(),
+
+            "training_source":
+                "reproducible_synthetic_dataset",
+
             "feature_importance": (
-                {f: round(float(v), 4) for f, v in zip(FEATURES, importances)}
-                if importances is not None else None
+                {
+                    feature: round(
+                        float(value),
+                        4,
+                    )
+                    for feature, value
+                    in zip(
+                        FEATURES,
+                        importances,
+                    )
+                }
+                if importances is not None
+                else None
             ),
         }
-        joblib.dump({"estimator": self.estimator, "metrics": self.metrics}, self.path)
+
+        joblib.dump(
+            {
+                "estimator":
+                    self.estimator,
+
+                "metrics":
+                    self.metrics,
+            },
+            self.path,
+        )
+
         return self.metrics
 
     def load(self) -> bool:
+        """
+        Load a previously trained model from disk.
+        """
+
         if not self.path.exists():
             return False
-        blob = joblib.load(self.path)
-        self.estimator = blob["estimator"]
-        self.metrics = blob["metrics"]
-        self.trained = True
-        return True
 
-    def predict(self, ctx: DecisionContext) -> DecisionResult:
+        try:
+
+            blob = joblib.load(
+                self.path
+            )
+
+            self.estimator = blob[
+                "estimator"
+            ]
+
+            self.metrics = blob.get(
+                "metrics",
+                {},
+            )
+
+            self.trained = True
+
+            return True
+
+        except Exception:
+
+            self.trained = False
+
+            return False
+
+    def predict(
+        self,
+        ctx: DecisionContext,
+    ) -> DecisionResult:
+        """
+        Predict a route from the supplied context.
+
+        No random or simulated context is generated here.
+        """
+
         if not self.trained:
-            raise RuntimeError(f"{self.name} not trained yet")
-        t0 = time.perf_counter()
-        x = ctx.as_vector()
-        proba = self.estimator.predict_proba(x)[0]
-        classes = list(self.estimator.classes_)
-        probs = {r: 0.0 for r in ROUTES}
-        for cls, p in zip(classes, proba):
-            probs[cls] = float(p)
-        route = max(probs, key=probs.get)
-        _normalize(probs)
-        return _wrap(route, probs[route], self.name,
-                     [f"top-feature: {max(self.metrics.get('feature_importance', {'?':0}).items(), key=lambda kv: kv[1])[0]}"] if self.metrics.get("feature_importance") else [],
-                     probs, t0)
+
+            raise RuntimeError(
+                f"{self.name} is not trained. "
+                "Call /api/decisions/train first."
+            )
+
+        started_at = time.perf_counter()
+
+        vector = ctx.as_vector()
+
+        prediction_probability = (
+            self.estimator
+            .predict_proba(vector)[0]
+        )
+
+        classes = list(
+            self.estimator.classes_
+        )
+
+        probabilities = {
+            route: 0.0
+            for route in ROUTES
+        }
+
+        for cls, probability in zip(
+            classes,
+            prediction_probability,
+        ):
+
+            probabilities[
+                str(cls)
+            ] = float(
+                probability
+            )
+
+        _normalize(
+            probabilities
+        )
+
+        route = max(
+            probabilities,
+            key=probabilities.get,
+        )
+
+        reasons: List[str] = []
+
+        feature_importance = (
+            self.metrics.get(
+                "feature_importance"
+            )
+        )
+
+        if feature_importance:
+
+            top_feature = max(
+                feature_importance.items(),
+                key=lambda item: item[1],
+            )[0]
+
+            reasons.append(
+                f"top feature: {top_feature}"
+            )
+
+        return _wrap(
+            route,
+            probabilities[route],
+            self.name,
+            reasons,
+            probabilities,
+            started_at,
+        )
 
 
-# ---------- Synthetic dataset ----------
-def _sample_context() -> DecisionContext:
-    connectivity = 1 if random.random() > 0.15 else 0
+# =========================================================
+# Synthetic training dataset
+# =========================================================
+
+def _sample_context(
+    rng: random.Random,
+) -> DecisionContext:
+    """
+    Generate one reproducible synthetic training context.
+
+    IMPORTANT:
+    This function is for model training / benchmark only.
+
+    It is NOT called during LIVE orchestration.
+    """
+
+    connectivity = (
+        1
+        if rng.random() > 0.15
+        else 0
+    )
+
     return DecisionContext(
-        network_latency_ms=(random.uniform(20, 500) if connectivity else 9999.0),
+
+        network_latency_ms=(
+            rng.uniform(
+                20,
+                500,
+            )
+            if connectivity
+            else 9999.0
+        ),
+
         connectivity=connectivity,
-        cpu_available=random.uniform(5, 95),
-        memory_available=random.uniform(10, 95),
-        batch_size=random.choice([1, 1, 2, 4, 8, 16, 32]),
-        priority=random.choice([1, 2, 2, 3, 3, 4, 5]),
-        cost_budget_usd=random.choice([0.0, 0.005, 0.05, 0.5, 1.0, 5.0, 10.0]),
-        model_size_mb=random.choice([6.2, 9.4, 15.1, 22.5, 40.0]),
+
+        cpu_available=rng.uniform(
+            5,
+            95,
+        ),
+
+        memory_available=rng.uniform(
+            10,
+            95,
+        ),
+
+        batch_size=rng.choice(
+            [
+                1,
+                1,
+                2,
+                4,
+                8,
+                16,
+                32,
+            ]
+        ),
+
+        priority=rng.choice(
+            [
+                1,
+                2,
+                2,
+                3,
+                3,
+                4,
+                5,
+            ]
+        ),
+
+        cost_budget_usd=rng.choice(
+            [
+                0.0,
+                0.005,
+                0.05,
+                0.5,
+                1.0,
+                5.0,
+                10.0,
+            ]
+        ),
+
+        model_size_mb=rng.choice(
+            [
+                6.2,
+                9.4,
+                15.1,
+                22.5,
+                40.0,
+            ]
+        ),
     )
 
 
-def build_synthetic_dataset(n: int = 4000, seed: int = 42) -> Tuple[np.ndarray, np.ndarray]:
-    random.seed(seed)
-    np.random.seed(seed)
-    X, y = [], []
+def build_synthetic_dataset(
+    n: int = 4000,
+    seed: int = 42,
+) -> Tuple[
+    np.ndarray,
+    np.ndarray,
+]:
+    """
+    Build deterministic/reproducible training data.
+
+    This dataset is isolated from the LIVE execution path.
+    """
+
+    rng = random.Random(
+        seed
+    )
+
+    X = []
+    y = []
+
     for _ in range(n):
-        ctx = _sample_context()
-        # Label from rule-based policy (with 8% label noise for realism)
-        label = rule_based_decide(ctx).route
-        if random.random() < 0.08:
-            label = random.choice([r for r in ROUTES if r != label])
-        X.append(ctx.as_vector().flatten())
-        y.append(label)
-    return np.array(X), np.array(y)
+
+        ctx = _sample_context(
+            rng
+        )
+
+        # Baseline label from interpretable policy.
+        label = rule_based_decide(
+            ctx
+        ).route
+
+        # Small deterministic stochastic label noise.
+        # Used only for training realism.
+        if rng.random() < 0.08:
+
+            alternative_routes = [
+                route
+                for route in ROUTES
+                if route != label
+            ]
+
+            label = rng.choice(
+                alternative_routes
+            )
+
+        X.append(
+            ctx
+            .as_vector()
+            .flatten()
+        )
+
+        y.append(
+            label
+        )
+
+    return (
+        np.asarray(
+            X,
+            dtype=float,
+        ),
+
+        np.asarray(
+            y,
+        ),
+    )
 
 
-# ---------- Registry ----------
+# =========================================================
+# Registry
+# =========================================================
+
 class DecisionEngineRegistry:
+    """
+    Registry for all four orchestration policies.
+
+    Supported aliases:
+
+    rule
+    dt
+    rf
+    ql
+    """
+
     def __init__(self):
-        self.dt = MLDecisionEngine("DecisionTree",
-            DecisionTreeClassifier(max_depth=8, min_samples_leaf=10, random_state=42))
-        self.rf = MLDecisionEngine("RandomForest",
-            RandomForestClassifier(n_estimators=80, max_depth=10, min_samples_leaf=5,
-                                   random_state=42, n_jobs=-1))
-        # try load previously trained
+
+        from qlearning_agent import (
+            qlearning_agent
+        )
+
+        # Rule Based does not require a model instance.
+
+        self.dt = MLDecisionEngine(
+            name="DecisionTree",
+            estimator=DecisionTreeClassifier(
+                max_depth=8,
+                min_samples_leaf=5,
+                random_state=42,
+            ),
+        )
+
+        self.rf = MLDecisionEngine(
+            name="RandomForest",
+            estimator=RandomForestClassifier(
+                n_estimators=80,
+                max_depth=10,
+                min_samples_leaf=3,
+                random_state=42,
+                n_jobs=-1,
+            ),
+        )
+
+        self.ql = qlearning_agent
+
+        # Attempt to restore persisted supervised models.
         self.dt.load()
         self.rf.load()
 
-    def train_all(self, n: int = 4000) -> Dict[str, Any]:
-        X, y = build_synthetic_dataset(n=n)
+    # -----------------------------------------------------
+    # Training
+    # -----------------------------------------------------
+
+    def train_all(
+        self,
+        n: int = 4000,
+    ) -> Dict[str, Any]:
+        """
+        Train DT, RF and Q-Learning.
+
+        DT/RF:
+        reproducible synthetic labelled dataset.
+
+        Q-Learning:
+        training routine implemented in qlearning_agent.py.
+        """
+
+        X, y = build_synthetic_dataset(
+            n=n,
+            seed=42,
+        )
+
+        dt_metrics = self.dt.train(
+            X,
+            y,
+        )
+
+        rf_metrics = self.rf.train(
+            X,
+            y,
+        )
+
+        ql_metrics = self.ql.train(
+            episodes=5000
+        )
+
         return {
-            "DecisionTree": self.dt.train(X, y),
-            "RandomForest": self.rf.train(X, y),
-            "dataset": {"n_samples": int(len(y)), "features": FEATURES, "classes": ROUTES},
+
+            "RuleBased": {
+                "trained": True,
+                "training_required": False,
+                "type":
+                    "interpretable_baseline",
+            },
+
+            "DecisionTree":
+                dt_metrics,
+
+            "RandomForest":
+                rf_metrics,
+
+            "QLearning":
+                ql_metrics,
+
+            "dataset": {
+                "n_samples": int(n),
+
+                "features":
+                    FEATURES,
+
+                "classes":
+                    ROUTES,
+
+                "source":
+                    "reproducible_synthetic_training_only",
+
+                "live_prediction_uses_real_context":
+                    True,
+            },
         }
 
-    def decide(self, ctx: DecisionContext, engine: str) -> DecisionResult:
-        engine = engine.lower()
-        if engine in ("rule", "rule-based", "rulebased"):
-            return rule_based_decide(ctx)
-        if engine in ("dt", "decisiontree", "decision-tree"):
+    # -----------------------------------------------------
+    # Decision
+    # -----------------------------------------------------
+
+    def decide(
+        self,
+        ctx: DecisionContext,
+        engine: str = "rule",
+    ) -> DecisionResult:
+        """
+        Execute the selected orchestration policy using the
+        DecisionContext supplied by the caller.
+        """
+
+        selected = (
+            engine
+            or "rule"
+        ).strip().lower()
+
+        # -------------------------
+        # Rule Based
+        # -------------------------
+
+        if selected in (
+            "rule",
+            "rulebased",
+            "rule-based",
+            "baseline",
+        ):
+
+            return rule_based_decide(
+                ctx
+            )
+
+        # -------------------------
+        # Decision Tree
+        # -------------------------
+
+        if selected in (
+            "dt",
+            "decisiontree",
+            "decision-tree",
+            "tree",
+        ):
+
             if not self.dt.trained:
-                self.train_all()
-            return self.dt.predict(ctx)
-        if engine in ("rf", "randomforest", "random-forest"):
-            if not self.rf.trained:
-                self.train_all()
-            return self.rf.predict(ctx)
-        if engine in ("ql", "qlearning", "q-learning"):
-            from qlearning_agent import qlearning_agent
-            if not qlearning_agent.trained:
-                qlearning_agent.train(episodes=5000)
-            return qlearning_agent.predict(ctx)
-        raise ValueError(f"unknown engine: {engine}")
 
-    def status(self) -> Dict[str, Any]:
-        from qlearning_agent import qlearning_agent
+                self.dt.load()
+
+            if not self.dt.trained:
+
+                raise RuntimeError(
+                    "DecisionTree is not trained. "
+                    "Call POST /api/decisions/train first."
+                )
+
+            return self.dt.predict(
+                ctx
+            )
+
+        # -------------------------
+        # Random Forest
+        # -------------------------
+
+        if selected in (
+            "rf",
+            "randomforest",
+            "random-forest",
+            "forest",
+        ):
+
+            if not self.rf.trained:
+
+                self.rf.load()
+
+            if not self.rf.trained:
+
+                raise RuntimeError(
+                    "RandomForest is not trained. "
+                    "Call POST /api/decisions/train first."
+                )
+
+            return self.rf.predict(
+                ctx
+            )
+
+              # -------------------------
+        # Q-Learning
+        # -------------------------
+
+        if selected in (
+            "ql",
+            "qlearning",
+            "q-learning",
+        ):
+            return self.ql.predict(
+                ctx
+            )
+
+        raise ValueError(
+            "Unknown decision engine: "
+            f"{engine}. "
+            "Supported engines are: "
+            "rule, dt, rf, ql."
+        )
+
+    # -----------------------------------------------------
+    # Status
+    # -----------------------------------------------------
+
+    def status(
+        self,
+    ) -> Dict[str, Any]:
+
         return {
-            "RuleBased": {"trained": True, "metrics": {"accuracy": 1.0, "note": "deterministic baseline"}},
-            "DecisionTree": {"trained": self.dt.trained, "metrics": self.dt.metrics},
-            "RandomForest": {"trained": self.rf.trained, "metrics": self.rf.metrics},
-            "QLearning": {"trained": qlearning_agent.trained, "metrics": qlearning_agent.metrics},
-            "features": FEATURES,
-            "classes": ROUTES,
+
+            "RuleBased": {
+                "available": True,
+                "trained": True,
+                "training_required": False,
+            },
+
+            "DecisionTree": {
+                "available": True,
+                "trained":
+                    self.dt.trained,
+                "metrics":
+                    self.dt.metrics,
+            },
+
+            "RandomForest": {
+                "available": True,
+                "trained":
+                    self.rf.trained,
+                "metrics":
+                    self.rf.metrics,
+            },
+
+            "QLearning": {
+                "available": True,
+                "trained":
+                    self.ql.trained,
+                "metrics":
+                    self.ql.metrics,
+            },
+
+            "features":
+                FEATURES,
+
+            "classes":
+                ROUTES,
+
+            "live_context":
+                "real infrastructure telemetry",
+
+            "training_context": {
+                "DecisionTree":
+                    "synthetic reproducible dataset",
+
+                "RandomForest":
+                    "synthetic reproducible dataset",
+
+                "QLearning":
+                    "qlearning_agent training environment",
+
+                "RuleBased":
+                    "no training required",
+            },
         }
 
+
+# =========================================================
+# Global registry
+# =========================================================
 
 registry = DecisionEngineRegistry()
+
+

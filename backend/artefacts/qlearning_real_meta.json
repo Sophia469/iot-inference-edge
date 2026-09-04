@@ -1,0 +1,18 @@
+{
+  "learning_mode": "real_execution_only",
+  "real_updates": 19107,
+  "n_states": 108,
+  "n_actions": 3,
+  "alpha": 0.15,
+  "gamma": 0.9,
+  "exploration_rate": 0.1,
+  "last_real_reward": -50.0,
+  "last_real_state": 104,
+  "last_real_action": "edge",
+  "last_real_latency_ms": 0.0,
+  "last_real_success": false,
+  "last_real_cost_usd": 0.0,
+  "last_real_resource_pressure": 0.0,
+  "last_failover_applied": false,
+  "last_real_update_at": 1788494415.8396611
+}

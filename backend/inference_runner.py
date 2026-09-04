@@ -1,28 +1,65 @@
+﻿"""
+Inference runner for LIVE Edge-Cloud execution.
+
+LIVE execution:
+- EDGE workloads are executed remotely on edge-node-01.
+- CLOUD workloads are executed remotely on AWS EC2 cloud-node-01.
+- Latency, CPU and memory metrics are measured by the node
+  that actually executes the workload.
+- No artificial network sleep or simulated infrastructure metrics
+  are used in this module.
+
+COST:
+- Edge AWS attributed cost is zero.
+- Cloud cost is an attributed compute cost based on the real measured
+  execution time and the configured EC2 On-Demand hourly rate.
+- This is NOT presented as an individual AWS billing line item.
 """
-Real inference runner — replaces the browser-side simulation with actual
-compute-bound work and real system telemetry.
 
-For academic validity:
- - `latency_ms` is measured with time.perf_counter (real wall-clock)
- - `cpu_percent`, `memory_mb` come from psutil (real process/system metrics)
- - The compute payload is deterministic and CPU-bound: a chain of numpy matmuls
-   sized after the "model_size_mb" parameter, plus PIL resize operations,
-   mimicking the compute pattern of a YOLO forward pass.
-
-The runner can operate in two modes:
- - mode="edge"  : runs the workload in-process (Jetson simulation)
- - mode="cloud" : simulates network RTT + a lighter payload (server-side heavy work)
-
-For the thesis experiment, this module records REAL latency numbers under
-REAL CPU load. In future, swap the numpy workload with an ONNX YOLO session.
-"""
 from __future__ import annotations
-import time
-import random
-import numpy as np
-import psutil
+
+import os
 from dataclasses import dataclass, asdict
 from typing import Literal, Dict, Any
+
+from edge_client import run_edge_inference
+from cloud_client import run_cloud_inference
+
+
+# ------------------------------------------------------------------
+# AWS cost configuration
+# ------------------------------------------------------------------
+
+AWS_INSTANCE_TYPE = "t3.micro"
+AWS_REGION = "eu-west-2"
+
+# Set this environment variable to the official current Linux/Unix
+# On-Demand hourly rate for t3.micro in eu-west-2.
+#
+# We deliberately do not invent or hard-code a regional price.
+AWS_EC2_HOURLY_RATE_USD = float(
+    os.environ.get("AWS_EC2_HOURLY_RATE_USD", "0.0")
+)
+
+
+def _attributed_cloud_cost(execution_ms: float) -> float:
+    """
+    Attribute a proportional share of EC2 compute cost to this execution.
+
+    This is an analytical per-execution allocation:
+
+        hourly_rate * execution_seconds / 3600
+
+    It is NOT the literal AWS invoice charge for an individual inference.
+    """
+    if execution_ms <= 0 or AWS_EC2_HOURLY_RATE_USD <= 0:
+        return 0.0
+
+    execution_seconds = execution_ms / 1000.0
+
+    return AWS_EC2_HOURLY_RATE_USD * (
+        execution_seconds / 3600.0
+    )
 
 
 @dataclass
@@ -37,93 +74,279 @@ class InferenceResult:
     success: bool
     detail: str
 
+    # Monetary cost attributed to this execution.
+    cost_usd: float = 0.0
+    cost_type: str = "attributed_compute_cost"
+    pricing_instance: str | None = None
+    pricing_region: str | None = None
+    hourly_rate_usd: float = 0.0
 
-def _matmul_workload(size_mb: float) -> tuple[int, np.ndarray]:
-    """Runs a chain of matmuls sized after the target model MB.
 
-    The chain size is derived so that 6.2 MB (YOLOv8n) ≈ 40M flops,
-    22.5 MB (YOLOv8s) ≈ 150M flops, etc.
-    Returns (approx_flops, final_tensor).
+
+def run_edge(
+    model_size_mb: float,
+    batch_size: int = 1
+) -> InferenceResult:
     """
-    dim = int(64 + 8 * size_mb)  # 6.2 -> ~114, 22.5 -> ~244, 40 -> ~384
-    x = np.random.randn(dim, dim).astype(np.float32)
-    for _ in range(3):
-        x = np.tanh(x @ x.T)
-    flops = int(3 * (dim ** 3) * 2)
-    return flops, x
+    Execute the workload remotely on the real Edge Compute Node.
+    """
 
+    try:
+        edge_result = run_edge_inference(
+            model_size_mb=model_size_mb,
+            batch_size=batch_size
+        )
 
-def run_edge(model_size_mb: float, batch_size: int = 1) -> InferenceResult:
-    process = psutil.Process()
-    # Prime the CPU sampler; a second call after work returns real percent.
-    process.cpu_percent(interval=None)
-    t0 = time.perf_counter()
-    total_flops = 0
-    for _ in range(batch_size):
-        flops, _ = _matmul_workload(model_size_mb)
-        total_flops += flops
-    latency = (time.perf_counter() - t0) * 1000.0
-    # Use a small interval to force a real sample (fixes 0% readings on fast workloads).
-    cpu = process.cpu_percent(interval=0.05)
-    mem_mb = process.memory_info().rss / (1024 * 1024)
-    fps = 1000.0 / max(latency, 0.001)
+    except Exception as exc:
+        return InferenceResult(
+            mode="edge",
+            latency_ms=0.0,
+            cpu_percent=0.0,
+            memory_mb=0.0,
+            fps_estimate=0.0,
+            workload_flops=0,
+            payload_kb=0.0,
+            success=False,
+            detail=f"Edge execution failed: {exc}",
+            cost_usd=0.0,
+            cost_type="no_aws_compute_cost",
+        )
+
+    latency_ms = float(
+        edge_result.get("latency_ms", 0.0)
+    )
+
+    cpu_percent = float(
+        edge_result.get("cpu_percent", 0.0)
+    )
+
+    memory_delta_mb = float(
+        edge_result.get("memory_delta_mb", 0.0)
+    )
+
+    fps = (
+        1000.0 / latency_ms
+        if latency_ms > 0
+        else 0.0
+    )
+
     return InferenceResult(
         mode="edge",
-        latency_ms=round(latency, 2),
-        cpu_percent=round(cpu, 2),
-        memory_mb=round(mem_mb, 2),
+        latency_ms=round(latency_ms, 2),
+        cpu_percent=round(cpu_percent, 2),
+        memory_mb=round(memory_delta_mb, 2),
         fps_estimate=round(fps, 2),
-        workload_flops=total_flops,
-        payload_kb=round(model_size_mb * 1024 / 32, 2),
-        success=True,
-        detail=f"in-process numpy matmul · batch={batch_size}",
+
+        # Not estimated/simulated.
+        workload_flops=0,
+        payload_kb=0.0,
+
+        success=(
+            edge_result.get("status")
+            == "completed"
+        ),
+
+        detail=(
+            "Remote execution on edge-node-01 "
+            f"({edge_result.get('platform', 'Linux')})"
+        ),
+
+        # No AWS EC2 compute is used by an Edge-only execution.
+        cost_usd=0.0,
+        cost_type="no_aws_compute_cost",
+        pricing_instance=None,
+        pricing_region=None,
+        hourly_rate_usd=0.0,
     )
 
 
-def run_cloud(model_size_mb: float, network_latency_ms: float,
-              connectivity: int = 1, batch_size: int = 1) -> InferenceResult:
+def run_cloud(
+    model_size_mb: float,
+    network_latency_ms: float | None = None,
+    connectivity: int = 1,
+    batch_size: int = 1
+) -> InferenceResult:
+    """
+    Execute the workload remotely on the real AWS EC2 Cloud Compute Node.
+
+    network_latency_ms is retained for API compatibility,
+    but it is NOT used to simulate latency.
+    """
+
     if connectivity == 0:
         return InferenceResult(
-            mode="cloud", latency_ms=0.0, cpu_percent=0.0, memory_mb=0.0,
-            fps_estimate=0.0, workload_flops=0, payload_kb=0.0,
-            success=False, detail="cloud unreachable — offline",
+            mode="cloud",
+            latency_ms=0.0,
+            cpu_percent=0.0,
+            memory_mb=0.0,
+            fps_estimate=0.0,
+            workload_flops=0,
+            payload_kb=0.0,
+            success=False,
+            detail="Cloud execution unavailable: connectivity=0",
+            cost_usd=0.0,
+            pricing_instance=AWS_INSTANCE_TYPE,
+            pricing_region=AWS_REGION,
+            hourly_rate_usd=AWS_EC2_HOURLY_RATE_USD,
         )
-    # Simulate network round-trip via real sleep (measured with perf_counter)
-    t0 = time.perf_counter()
-    time.sleep(network_latency_ms / 1000.0)  # RTT
-    # Cloud does a smaller local proxy work (server-side heavy work is remote)
-    process = psutil.Process()
-    process.cpu_percent(interval=None)
-    dim = int(32 + 2 * model_size_mb)
-    x = np.random.randn(dim, dim).astype(np.float32)
-    for _ in range(2):
-        x = x @ x.T
-    latency = (time.perf_counter() - t0) * 1000.0
-    cpu = process.cpu_percent(interval=None)
-    mem_mb = process.memory_info().rss / (1024 * 1024)
-    fps = 1000.0 / max(latency, 0.001)
-    payload_kb = model_size_mb * 24  # request bytes proxy
+
+    try:
+        cloud_result = run_cloud_inference(
+            model_size_mb=model_size_mb,
+            batch_size=batch_size
+        )
+
+    except Exception as exc:
+        return InferenceResult(
+            mode="cloud",
+            latency_ms=0.0,
+            cpu_percent=0.0,
+            memory_mb=0.0,
+            fps_estimate=0.0,
+            workload_flops=0,
+            payload_kb=0.0,
+            success=False,
+            detail=f"AWS cloud execution failed: {exc}",
+            cost_usd=0.0,
+            pricing_instance=AWS_INSTANCE_TYPE,
+            pricing_region=AWS_REGION,
+            hourly_rate_usd=AWS_EC2_HOURLY_RATE_USD,
+        )
+
+    latency_ms = float(
+        cloud_result.get("latency_ms", 0.0)
+    )
+
+    cpu_percent = float(
+        cloud_result.get("cpu_percent", 0.0)
+    )
+
+    memory_delta_mb = float(
+        cloud_result.get(
+            "memory_delta_mb",
+            0.0
+        )
+    )
+
+    fps = (
+        1000.0 / latency_ms
+        if latency_ms > 0
+        else 0.0
+    )
+
+    attributed_cost = _attributed_cloud_cost(
+        latency_ms
+    )
+
     return InferenceResult(
         mode="cloud",
-        latency_ms=round(latency, 2),
-        cpu_percent=round(cpu, 2),
-        memory_mb=round(mem_mb, 2),
-        fps_estimate=round(fps, 2),
-        workload_flops=int(2 * (dim ** 3) * 2),
-        payload_kb=round(payload_kb, 2),
-        success=True,
-        detail=f"real network RTT + remote proxy · batch={batch_size}",
+        latency_ms=round(latency_ms, 2),
+        cpu_percent=round(cpu_percent, 2),
+        memory_mb=round(memory_delta_mb, 2),
+
+        fps_estimate=round(
+            fps,
+            2
+        ),
+
+        workload_flops=0,
+        payload_kb=0.0,
+
+        success=(
+            cloud_result.get("status")
+            == "completed"
+        ),
+
+        detail=(
+            "Remote execution on AWS EC2 "
+            "cloud-node-01 "
+            f"({cloud_result.get('platform', 'Linux')})"
+        ),
+
+        cost_usd=round(attributed_cost, 12),
+        cost_type="attributed_compute_cost",
+        pricing_instance=AWS_INSTANCE_TYPE,
+        pricing_region=AWS_REGION,
+        hourly_rate_usd=AWS_EC2_HOURLY_RATE_USD,
     )
 
 
-def run(mode: str, model_size_mb: float, network_latency_ms: float = 100.0,
-        connectivity: int = 1, batch_size: int = 1) -> Dict[str, Any]:
+def run(
+    mode: str,
+    model_size_mb: float,
+    network_latency_ms: float | None = None,
+    connectivity: int = 1,
+    batch_size: int = 1
+) -> Dict[str, Any]:
+
     if mode == "edge":
-        return asdict(run_edge(model_size_mb, batch_size=batch_size))
+        return asdict(
+            run_edge(
+                model_size_mb,
+                batch_size=batch_size
+            )
+        )
+
     if mode == "cloud":
-        return asdict(run_cloud(model_size_mb, network_latency_ms, connectivity, batch_size=batch_size))
+        return asdict(
+            run_cloud(
+                model_size_mb,
+                network_latency_ms,
+                connectivity,
+                batch_size=batch_size
+            )
+        )
+
     if mode == "hybrid":
-        # Edge primary + cloud audit — record edge latency, mark cloud replicate ok
-        e = run_edge(model_size_mb, batch_size=batch_size)
-        return {**asdict(e), "mode": "hybrid", "detail": e.detail + " · cloud audit-replicate"}
-    raise ValueError(f"unknown mode {mode}")
+        # Both routes are executed for real.
+        edge = run_edge(
+            model_size_mb,
+            batch_size=batch_size
+        )
+
+        cloud = run_cloud(
+            model_size_mb,
+            network_latency_ms,
+            connectivity,
+            batch_size=batch_size
+        )
+
+        return {
+            "mode": "hybrid",
+
+            "success": (
+                edge.success
+                and cloud.success
+            ),
+
+            # Edge measurements
+            "latency_ms": edge.latency_ms,
+            "cpu_percent": edge.cpu_percent,
+            "memory_mb": edge.memory_mb,
+            "fps_estimate": edge.fps_estimate,
+
+            # Cloud measurements
+            "cloud_latency_ms": cloud.latency_ms,
+            "cloud_cpu_percent": cloud.cpu_percent,
+            "cloud_memory_mb": cloud.memory_mb,
+            "cloud_fps_estimate": cloud.fps_estimate,
+
+            "workload_flops": 0,
+            "payload_kb": 0.0,
+
+            # Hybrid uses AWS for its Cloud component.
+            "cost_usd": cloud.cost_usd,
+            "cost_type": "attributed_compute_cost",
+            "pricing_instance": AWS_INSTANCE_TYPE,
+            "pricing_region": AWS_REGION,
+            "hourly_rate_usd": AWS_EC2_HOURLY_RATE_USD,
+
+            "detail": (
+                "Real hybrid execution: "
+                "edge-node-01 + AWS cloud-node-01"
+            ),
+        }
+
+    raise ValueError(
+        f"Unknown inference mode: {mode}"
+    )
